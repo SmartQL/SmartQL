@@ -1,0 +1,595 @@
+version: "1.0"
+
+# ========================================
+# TRAKLI - Personal Finance Tracker
+# ========================================
+# A personal finance application for tracking
+# income, expenses, wallets, and transfers.
+
+database:
+  type: mysql
+  connection:
+    host: 127.0.0.1
+    port: 3306
+    database: trakli
+    user: trakli
+    password: secret
+
+# ========================================
+# SEMANTIC LAYER
+# ========================================
+semantic_layer:
+  entities:
+    # ----- USERS -----
+    users:
+      table: users
+      description: "Application users who track their finances"
+      aliases:
+        - accounts
+        - members
+      columns:
+        id:
+          type: integer
+          primary: true
+          description: "Unique user identifier"
+        email:
+          type: string
+          description: "User's email address"
+          unique: true
+        first_name:
+          type: string
+          description: "User's first name"
+          aliases: ["name", "firstname"]
+        last_name:
+          type: string
+          description: "User's last name"
+          aliases: ["surname", "lastname"]
+        username:
+          type: string
+          description: "User's display name"
+        phone:
+          type: string
+          description: "Contact phone number"
+        email_verified_at:
+          type: datetime
+          description: "When email was verified"
+        created_at:
+          type: datetime
+          description: "Registration date"
+          aliases: ["registered", "joined"]
+        updated_at:
+          type: datetime
+
+    # ----- WALLETS -----
+    wallets:
+      table: wallets
+      description: "Financial accounts like bank accounts, cash, credit cards"
+      aliases:
+        - accounts
+        - bank_accounts
+        - money
+      columns:
+        id:
+          type: integer
+          primary: true
+        name:
+          type: string
+          description: "Wallet name (e.g., 'Main Bank Account')"
+          searchable: true
+        slug:
+          type: string
+          description: "URL-friendly identifier"
+        type:
+          type: enum
+          description: "Type of wallet"
+          aliases: ["wallet_type", "account_type"]
+        balance:
+          type: decimal
+          description: "Current balance"
+          aliases: ["amount", "total"]
+        currency:
+          type: string
+          description: "Currency code (USD, EUR, etc.)"
+        description:
+          type: text
+          description: "Wallet description"
+        user_id:
+          type: integer
+          references: users.id
+        created_at:
+          type: datetime
+        updated_at:
+          type: datetime
+        deleted_at:
+          type: datetime
+          description: "Soft delete timestamp"
+
+    # ----- TRANSACTIONS -----
+    transactions:
+      table: transactions
+      description: "Financial transactions (income and expenses)"
+      aliases:
+        - expenses
+        - income
+        - payments
+        - entries
+      columns:
+        id:
+          type: integer
+          primary: true
+        amount:
+          type: decimal
+          description: "Transaction amount"
+          aliases: ["value", "sum"]
+        datetime:
+          type: datetime
+          description: "When the transaction occurred"
+          aliases: ["date", "transaction_date", "when"]
+        type:
+          type: enum
+          description: "Transaction type (income/expense)"
+          aliases: ["transaction_type"]
+        description:
+          type: text
+          description: "Transaction description/note"
+          aliases: ["note", "memo", "details"]
+        wallet_id:
+          type: integer
+          references: wallets.id
+        party_id:
+          type: integer
+          references: parties.id
+        user_id:
+          type: integer
+          references: users.id
+        transfer_id:
+          type: integer
+          references: transfers.id
+          description: "Link to transfer if this is a transfer transaction"
+        created_at:
+          type: datetime
+        updated_at:
+          type: datetime
+        deleted_at:
+          type: datetime
+
+    # ----- TRANSFERS -----
+    transfers:
+      table: transfers
+      description: "Money transfers between wallets"
+      aliases:
+        - wallet_transfers
+        - money_transfers
+      columns:
+        id:
+          type: integer
+          primary: true
+        amount:
+          type: decimal
+          description: "Transfer amount"
+        exchange_rate:
+          type: decimal
+          description: "Exchange rate for currency conversion"
+        user_id:
+          type: integer
+          references: users.id
+        from_wallet_id:
+          type: integer
+          references: wallets.id
+          description: "Source wallet"
+          aliases: ["source", "from"]
+        to_wallet_id:
+          type: integer
+          references: wallets.id
+          description: "Destination wallet"
+          aliases: ["destination", "to"]
+        created_at:
+          type: datetime
+        updated_at:
+          type: datetime
+
+    # ----- CATEGORIES -----
+    categories:
+      table: categories
+      description: "Categories for organizing transactions"
+      aliases:
+        - tags
+        - labels
+      columns:
+        id:
+          type: integer
+          primary: true
+        name:
+          type: string
+          description: "Category name"
+          searchable: true
+        slug:
+          type: string
+          description: "URL-friendly identifier"
+        description:
+          type: text
+        type:
+          type: enum
+          description: "Category type"
+        user_id:
+          type: integer
+          references: users.id
+        created_at:
+          type: datetime
+        updated_at:
+          type: datetime
+        deleted_at:
+          type: datetime
+
+    # ----- PARTIES -----
+    parties:
+      table: parties
+      description: "People or businesses you transact with"
+      aliases:
+        - payees
+        - payers
+        - contacts
+        - merchants
+      columns:
+        id:
+          type: integer
+          primary: true
+        name:
+          type: string
+          description: "Party name"
+          searchable: true
+          aliases: ["payee", "payer", "merchant"]
+        type:
+          type: string
+          description: "Party type"
+        description:
+          type: text
+        user_id:
+          type: integer
+          references: users.id
+        created_at:
+          type: datetime
+        updated_at:
+          type: datetime
+        deleted_at:
+          type: datetime
+
+    # ----- GROUPS -----
+    groups:
+      table: groups
+      description: "Groups for organizing wallets or transactions"
+      columns:
+        id:
+          type: integer
+          primary: true
+        name:
+          type: string
+          description: "Group name"
+          searchable: true
+        slug:
+          type: string
+        type:
+          type: string
+        description:
+          type: text
+        user_id:
+          type: integer
+          references: users.id
+        created_at:
+          type: datetime
+        updated_at:
+          type: datetime
+        deleted_at:
+          type: datetime
+
+    # ----- RECURRING RULES -----
+    recurring_rules:
+      table: recurring_transaction_rules
+      description: "Rules for recurring/scheduled transactions"
+      aliases:
+        - recurring_transactions
+        - scheduled_transactions
+        - recurring
+      columns:
+        id:
+          type: integer
+          primary: true
+        recurrence_period:
+          type: enum
+          description: "Period (daily, weekly, monthly, yearly)"
+          aliases: ["frequency", "period"]
+        recurrence_interval:
+          type: integer
+          description: "Interval between occurrences"
+        recurrence_ends_at:
+          type: datetime
+          description: "When recurrence stops"
+        transaction_id:
+          type: integer
+          references: transactions.id
+        next_scheduled_at:
+          type: datetime
+          description: "Next occurrence date"
+          aliases: ["next_date", "upcoming"]
+        created_at:
+          type: datetime
+        updated_at:
+          type: datetime
+
+  # ========================================
+  # RELATIONSHIPS
+  # ========================================
+  relationships:
+    - name: user_wallets
+      type: one_to_many
+      from: users
+      to: wallets
+      foreign_key: user_id
+      description: "Users can have multiple wallets"
+
+    - name: user_transactions
+      type: one_to_many
+      from: users
+      to: transactions
+      foreign_key: user_id
+      description: "Users have transactions"
+
+    - name: wallet_transactions
+      type: one_to_many
+      from: wallets
+      to: transactions
+      foreign_key: wallet_id
+      description: "Wallets contain transactions"
+
+    - name: user_categories
+      type: one_to_many
+      from: users
+      to: categories
+      foreign_key: user_id
+      description: "Users create custom categories"
+
+    - name: user_parties
+      type: one_to_many
+      from: users
+      to: parties
+      foreign_key: user_id
+      description: "Users have contacts/parties"
+
+    - name: transaction_party
+      type: many_to_one
+      from: transactions
+      to: parties
+      foreign_key: party_id
+      description: "Transactions are with a party"
+
+    - name: user_transfers
+      type: one_to_many
+      from: users
+      to: transfers
+      foreign_key: user_id
+      description: "Users make transfers"
+
+    - name: transfer_from_wallet
+      type: many_to_one
+      from: transfers
+      to: wallets
+      foreign_key: from_wallet_id
+      description: "Transfers have a source wallet"
+
+    - name: transfer_to_wallet
+      type: many_to_one
+      from: transfers
+      to: wallets
+      foreign_key: to_wallet_id
+      description: "Transfers have a destination wallet"
+
+  # ========================================
+  # BUSINESS RULES
+  # ========================================
+  business_rules:
+    # Transaction types
+    - name: income
+      applies_to: [transactions]
+      definition: "type = 'income'"
+      description: "Income transactions"
+      aliases: ["earnings", "received"]
+
+    - name: expense
+      applies_to: [transactions]
+      definition: "type = 'expense'"
+      description: "Expense transactions"
+      aliases: ["spending", "spent", "payment"]
+
+    # Time-based rules
+    - name: today
+      applies_to: ["*"]
+      definition: "DATE(datetime) = CURDATE()"
+      description: "Today's records"
+
+    - name: this_week
+      applies_to: ["*"]
+      definition: "YEARWEEK(datetime) = YEARWEEK(CURDATE())"
+      description: "This week's records"
+
+    - name: this_month
+      applies_to: ["*"]
+      definition: "YEAR(datetime) = YEAR(CURDATE()) AND MONTH(datetime) = MONTH(CURDATE())"
+      description: "This month's records"
+      aliases: ["current_month"]
+
+    - name: last_month
+      applies_to: ["*"]
+      definition: "datetime >= DATE_SUB(CURDATE(), INTERVAL 1 MONTH)"
+      description: "Last 30 days"
+      aliases: ["past_month", "recent"]
+
+    - name: this_year
+      applies_to: ["*"]
+      definition: "YEAR(datetime) = YEAR(CURDATE())"
+      description: "This year's records"
+      aliases: ["current_year"]
+
+    # Amount-based rules
+    - name: high_value
+      applies_to: [transactions, transfers]
+      definition: "amount >= 1000"
+      description: "High-value transactions ($1000+)"
+      aliases: ["large", "big"]
+
+    - name: small
+      applies_to: [transactions, transfers]
+      definition: "amount < 50"
+      description: "Small transactions (under $50)"
+
+    # Wallet rules
+    - name: positive_balance
+      applies_to: [wallets]
+      definition: "balance > 0"
+      description: "Wallets with positive balance"
+
+    - name: negative_balance
+      applies_to: [wallets]
+      definition: "balance < 0"
+      description: "Wallets with negative balance (debt)"
+      aliases: ["in_debt", "overdrawn"]
+
+    - name: empty
+      applies_to: [wallets]
+      definition: "balance = 0"
+      description: "Wallets with zero balance"
+
+    # Soft delete
+    - name: active
+      applies_to: [wallets, categories, parties, groups]
+      definition: "deleted_at IS NULL"
+      description: "Non-deleted records"
+
+    - name: deleted
+      applies_to: [wallets, categories, parties, groups]
+      definition: "deleted_at IS NOT NULL"
+      description: "Soft-deleted records"
+
+  # ========================================
+  # AGGREGATIONS
+  # ========================================
+  aggregations:
+    - name: total_income
+      entity: transactions
+      expression: "SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END)"
+      description: "Total income"
+      aliases: ["income_total", "earnings"]
+
+    - name: total_expenses
+      entity: transactions
+      expression: "SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END)"
+      description: "Total expenses"
+      aliases: ["expense_total", "spending"]
+
+    - name: net_balance
+      entity: transactions
+      expression: "SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END)"
+      description: "Net balance (income - expenses)"
+      aliases: ["net", "profit"]
+
+    - name: transaction_count
+      entity: transactions
+      expression: "COUNT(*)"
+      description: "Number of transactions"
+      aliases: ["num_transactions", "count"]
+
+    - name: average_transaction
+      entity: transactions
+      expression: "AVG(amount)"
+      description: "Average transaction amount"
+      aliases: ["avg_transaction"]
+
+    - name: total_balance
+      entity: wallets
+      expression: "SUM(balance)"
+      description: "Total balance across all wallets"
+      aliases: ["net_worth"]
+
+# ========================================
+# SECURITY
+# ========================================
+security:
+  mode: read_only
+
+  allowed_tables:
+    - users
+    - wallets
+    - transactions
+    - transfers
+    - categories
+    - parties
+    - groups
+    - recurring_transaction_rules
+
+  blocked_columns:
+    - users.password
+    - users.remember_token
+    - personal_access_tokens.token
+
+  max_rows: 1000
+  timeout_seconds: 30
+  max_join_depth: 4
+
+# ========================================
+# LLM CONFIGURATION
+# ========================================
+llm:
+  provider: groq
+  groq:
+    api_key: ${GROQ_API_KEY}
+    model: llama-3.1-8b-instant
+    temperature: 0
+
+# ========================================
+# CACHING
+# ========================================
+cache:
+  enabled: true
+  backend: memory
+  ttl_seconds: 3600
+
+# ========================================
+# EXAMPLE QUERIES
+# ========================================
+prompts:
+  examples:
+    - question: "my wallets"
+      sql: "SELECT * FROM wallets WHERE deleted_at IS NULL"
+
+    - question: "total balance"
+      sql: "SELECT SUM(balance) as total_balance FROM wallets WHERE deleted_at IS NULL"
+
+    - question: "expenses this month"
+      sql: |
+        SELECT * FROM transactions
+        WHERE type = 'expense'
+        AND YEAR(datetime) = YEAR(CURDATE())
+        AND MONTH(datetime) = MONTH(CURDATE())
+        AND deleted_at IS NULL
+
+    - question: "income vs expenses this month"
+      sql: |
+        SELECT
+          SUM(CASE WHEN type = 'income' THEN amount ELSE 0 END) as total_income,
+          SUM(CASE WHEN type = 'expense' THEN amount ELSE 0 END) as total_expenses,
+          SUM(CASE WHEN type = 'income' THEN amount ELSE -amount END) as net
+        FROM transactions
+        WHERE YEAR(datetime) = YEAR(CURDATE())
+        AND MONTH(datetime) = MONTH(CURDATE())
+        AND deleted_at IS NULL
+
+    - question: "top spending categories"
+      sql: |
+        SELECT c.name, SUM(t.amount) as total_spent
+        FROM transactions t
+        JOIN categorizables cat ON cat.categorizable_id = t.id
+          AND cat.categorizable_type = 'App\\Models\\Transaction'
+        JOIN categories c ON c.id = cat.category_id
+        WHERE t.type = 'expense' AND t.deleted_at IS NULL
+        GROUP BY c.id, c.name
+        ORDER BY total_spent DESC
+        LIMIT 10

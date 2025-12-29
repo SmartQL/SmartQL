@@ -1,0 +1,644 @@
+version: "1.0"
+
+# ========================================
+# DATABASE CONNECTION
+# ========================================
+database:
+  type: postgresql
+  connection:
+    url: ${DATABASE_URL}
+    # Or use individual parameters:
+    # host: ${DB_HOST}
+    # port: 5432
+    # database: ${DB_NAME}
+    # user: ${DB_USER}
+    # password: ${DB_PASSWORD}
+    pool:
+      min_connections: 2
+      max_connections: 10
+
+# ========================================
+# SEMANTIC LAYER
+# ========================================
+semantic_layer:
+  entities:
+    # ----- USERS/CUSTOMERS -----
+    customers:
+      table: users
+      description: "Registered customers who can browse and purchase products"
+      aliases:
+        - users
+        - members
+        - accounts
+        - buyers
+      columns:
+        id:
+          type: integer
+          description: "Unique customer identifier"
+          primary: true
+        email:
+          type: string
+          description: "Customer's email address (unique)"
+          searchable: true
+          unique: true
+        name:
+          type: string
+          description: "Customer's full name"
+          aliases: ["full_name", "customer_name"]
+        status:
+          type: enum
+          values: ["active", "inactive", "suspended", "pending"]
+          description: "Account status"
+          aliases: ["state", "account_status"]
+        tier:
+          type: enum
+          values: ["free", "basic", "premium", "enterprise"]
+          description: "Subscription/loyalty tier"
+          aliases: ["plan", "subscription", "level", "membership"]
+        phone:
+          type: string
+          description: "Contact phone number"
+        address:
+          type: string
+          description: "Shipping address"
+        city:
+          type: string
+          description: "City"
+        country:
+          type: string
+          description: "Country code"
+        balance:
+          type: decimal
+          description: "Account credit balance in USD"
+          aliases: ["credit", "wallet", "account_balance"]
+        is_verified:
+          type: boolean
+          description: "Whether email has been verified"
+          aliases: ["verified", "email_verified"]
+        last_login:
+          type: datetime
+          description: "Last login timestamp"
+        created_at:
+          type: datetime
+          description: "Registration date"
+          aliases: ["registered", "signup_date", "joined", "registration_date"]
+        updated_at:
+          type: datetime
+          description: "Last profile update"
+
+    # ----- PRODUCTS -----
+    products:
+      table: products
+      description: "Products available for purchase"
+      aliases:
+        - items
+        - goods
+        - merchandise
+      columns:
+        id:
+          type: integer
+          primary: true
+        sku:
+          type: string
+          description: "Stock keeping unit"
+          unique: true
+        name:
+          type: string
+          description: "Product name"
+          searchable: true
+          aliases: ["title", "product_name"]
+        description:
+          type: text
+          description: "Product description"
+        price:
+          type: decimal
+          description: "Current price in USD"
+          aliases: ["cost", "amount"]
+        original_price:
+          type: decimal
+          description: "Original price before discount"
+          aliases: ["msrp", "list_price"]
+        stock_quantity:
+          type: integer
+          description: "Current inventory count"
+          aliases: ["inventory", "quantity", "stock"]
+        category_id:
+          type: integer
+          references: categories.id
+        brand:
+          type: string
+          description: "Product brand"
+          aliases: ["manufacturer"]
+        is_active:
+          type: boolean
+          description: "Whether product is available for sale"
+          aliases: ["active", "available", "enabled"]
+        rating:
+          type: decimal
+          description: "Average customer rating (1-5)"
+          aliases: ["avg_rating", "stars"]
+        review_count:
+          type: integer
+          description: "Number of customer reviews"
+          aliases: ["reviews", "num_reviews"]
+        created_at:
+          type: datetime
+        updated_at:
+          type: datetime
+
+    # ----- CATEGORIES -----
+    categories:
+      table: categories
+      description: "Product categories for organization"
+      aliases:
+        - category
+        - product_categories
+      columns:
+        id:
+          type: integer
+          primary: true
+        name:
+          type: string
+          description: "Category name"
+          searchable: true
+        slug:
+          type: string
+          description: "URL-friendly name"
+        parent_id:
+          type: integer
+          references: categories.id
+          description: "Parent category for hierarchy"
+        description:
+          type: text
+        is_active:
+          type: boolean
+
+    # ----- ORDERS -----
+    orders:
+      table: orders
+      description: "Customer purchase orders"
+      aliases:
+        - purchases
+        - transactions
+        - sales
+      columns:
+        id:
+          type: integer
+          primary: true
+        order_number:
+          type: string
+          description: "Human-readable order ID"
+          unique: true
+          aliases: ["order_id", "reference"]
+        user_id:
+          type: integer
+          references: users.id
+        status:
+          type: enum
+          values: ["pending", "processing", "paid", "shipped", "delivered", "cancelled", "refunded"]
+          description: "Order status"
+          aliases: ["state", "order_status"]
+        subtotal:
+          type: decimal
+          description: "Order subtotal before tax/shipping"
+        tax:
+          type: decimal
+          description: "Tax amount"
+        shipping:
+          type: decimal
+          description: "Shipping cost"
+          aliases: ["shipping_cost", "delivery_fee"]
+        total:
+          type: decimal
+          description: "Final order total in USD"
+          aliases: ["amount", "order_total", "grand_total", "revenue"]
+        discount:
+          type: decimal
+          description: "Discount applied"
+          aliases: ["discount_amount"]
+        coupon_code:
+          type: string
+          description: "Applied coupon code"
+        shipping_address:
+          type: string
+          description: "Delivery address"
+        notes:
+          type: text
+          description: "Order notes"
+        created_at:
+          type: datetime
+          description: "Order date"
+          aliases: ["order_date", "purchased_at", "placed_at"]
+        shipped_at:
+          type: datetime
+          description: "Shipping date"
+        delivered_at:
+          type: datetime
+          description: "Delivery date"
+
+    # ----- ORDER ITEMS -----
+    order_items:
+      table: order_items
+      description: "Individual items within an order"
+      aliases:
+        - line_items
+        - order_lines
+        - items
+      columns:
+        id:
+          type: integer
+          primary: true
+        order_id:
+          type: integer
+          references: orders.id
+        product_id:
+          type: integer
+          references: products.id
+        quantity:
+          type: integer
+          description: "Number of units ordered"
+          aliases: ["qty", "count"]
+        unit_price:
+          type: decimal
+          description: "Price per unit at time of order"
+          aliases: ["price"]
+        total:
+          type: decimal
+          description: "Line item total (quantity × unit_price)"
+          aliases: ["line_total", "amount"]
+
+    # ----- REVIEWS -----
+    reviews:
+      table: reviews
+      description: "Customer product reviews"
+      aliases:
+        - ratings
+        - feedback
+      columns:
+        id:
+          type: integer
+          primary: true
+        user_id:
+          type: integer
+          references: users.id
+        product_id:
+          type: integer
+          references: products.id
+        rating:
+          type: integer
+          description: "Star rating (1-5)"
+          aliases: ["stars", "score"]
+        title:
+          type: string
+          description: "Review title"
+        body:
+          type: text
+          description: "Review content"
+          aliases: ["content", "text", "comment"]
+        is_verified:
+          type: boolean
+          description: "Verified purchase review"
+        helpful_count:
+          type: integer
+          description: "Number of helpful votes"
+        created_at:
+          type: datetime
+          aliases: ["reviewed_at", "posted_at"]
+
+  # ========================================
+  # RELATIONSHIPS
+  # ========================================
+  relationships:
+    - name: customer_orders
+      type: one_to_many
+      from: customers
+      to: orders
+      foreign_key: user_id
+      description: "Customers can place multiple orders"
+
+    - name: order_items
+      type: one_to_many
+      from: orders
+      to: order_items
+      foreign_key: order_id
+      description: "Orders contain multiple line items"
+
+    - name: product_order_items
+      type: one_to_many
+      from: products
+      to: order_items
+      foreign_key: product_id
+      description: "Products appear in order items"
+
+    - name: product_category
+      type: many_to_one
+      from: products
+      to: categories
+      foreign_key: category_id
+      description: "Products belong to a category"
+
+    - name: category_hierarchy
+      type: many_to_one
+      from: categories
+      to: categories
+      foreign_key: parent_id
+      description: "Categories can have parent categories"
+
+    - name: customer_reviews
+      type: one_to_many
+      from: customers
+      to: reviews
+      foreign_key: user_id
+      description: "Customers can write reviews"
+
+    - name: product_reviews
+      type: one_to_many
+      from: products
+      to: reviews
+      foreign_key: product_id
+      description: "Products can have reviews"
+
+  # ========================================
+  # BUSINESS RULES
+  # ========================================
+  business_rules:
+    # Status rules
+    - name: active
+      applies_to: [customers, products]
+      definition: "status = 'active'"
+      description: "Has active status"
+      aliases: ["enabled"]
+
+    - name: inactive
+      applies_to: [customers, products]
+      definition: "status = 'inactive'"
+      description: "Has inactive status"
+
+    - name: suspended
+      applies_to: [customers]
+      definition: "status = 'suspended'"
+      description: "Account is suspended"
+
+    # Customer tier rules
+    - name: premium
+      applies_to: [customers]
+      definition: "tier IN ('premium', 'enterprise')"
+      description: "Premium or enterprise tier customers"
+      aliases: ["premium_customer", "high_tier"]
+
+    - name: free_tier
+      applies_to: [customers]
+      definition: "tier = 'free'"
+      description: "Free tier customers"
+
+    # Order status rules
+    - name: pending
+      applies_to: [orders]
+      definition: "status = 'pending'"
+      description: "Awaiting payment"
+
+    - name: paid
+      applies_to: [orders]
+      definition: "status = 'paid'"
+      description: "Payment received"
+
+    - name: shipped
+      applies_to: [orders]
+      definition: "status IN ('shipped', 'delivered')"
+      description: "Order has been shipped"
+
+    - name: delivered
+      applies_to: [orders]
+      definition: "status = 'delivered'"
+      description: "Order delivered to customer"
+
+    - name: cancelled
+      applies_to: [orders]
+      definition: "status = 'cancelled'"
+      description: "Order was cancelled"
+
+    - name: completed
+      applies_to: [orders]
+      definition: "status IN ('delivered', 'completed')"
+      description: "Successfully completed orders"
+
+    # Time-based rules
+    - name: recent
+      applies_to: ["*"]
+      definition: "created_at >= NOW() - INTERVAL '30 days'"
+      description: "Within the last 30 days"
+      aliases: ["last_month", "last_30_days"]
+
+    - name: this_week
+      applies_to: ["*"]
+      definition: "created_at >= DATE_TRUNC('week', CURRENT_DATE)"
+      description: "Created this week"
+
+    - name: this_month
+      applies_to: ["*"]
+      definition: "created_at >= DATE_TRUNC('month', CURRENT_DATE)"
+      description: "Created this calendar month"
+
+    - name: this_year
+      applies_to: ["*"]
+      definition: "created_at >= DATE_TRUNC('year', CURRENT_DATE)"
+      description: "Created this calendar year"
+
+    - name: today
+      applies_to: ["*"]
+      definition: "DATE(created_at) = CURRENT_DATE"
+      description: "Created today"
+
+    - name: yesterday
+      applies_to: ["*"]
+      definition: "DATE(created_at) = CURRENT_DATE - INTERVAL '1 day'"
+      description: "Created yesterday"
+
+    # Value-based rules
+    - name: high_value
+      applies_to: [orders]
+      definition: "total >= 1000"
+      description: "Orders worth $1,000 or more"
+      aliases: ["high_value_order", "large_order", "big_order"]
+
+    - name: low_value
+      applies_to: [orders]
+      definition: "total < 50"
+      description: "Orders under $50"
+      aliases: ["small_order"]
+
+    # Product rules
+    - name: in_stock
+      applies_to: [products]
+      definition: "stock_quantity > 0"
+      description: "Products currently in stock"
+      aliases: ["available", "has_stock"]
+
+    - name: out_of_stock
+      applies_to: [products]
+      definition: "stock_quantity = 0"
+      description: "Products with no inventory"
+      aliases: ["sold_out"]
+
+    - name: low_stock
+      applies_to: [products]
+      definition: "stock_quantity > 0 AND stock_quantity <= 10"
+      description: "Products running low on inventory"
+
+    - name: on_sale
+      applies_to: [products]
+      definition: "price < original_price"
+      description: "Products currently on sale"
+      aliases: ["discounted"]
+
+    - name: highly_rated
+      applies_to: [products]
+      definition: "rating >= 4.5"
+      description: "Products with 4.5+ star rating"
+      aliases: ["top_rated", "best_rated"]
+
+    - name: popular
+      applies_to: [products]
+      definition: "review_count >= 100"
+      description: "Products with 100+ reviews"
+
+    # Customer rules
+    - name: verified
+      applies_to: [customers, reviews]
+      definition: "is_verified = true"
+      description: "Verified accounts/reviews"
+
+    - name: new_customer
+      applies_to: [customers]
+      definition: "created_at >= NOW() - INTERVAL '7 days'"
+      description: "Registered in the last 7 days"
+      aliases: ["new_user", "recent_signup"]
+
+    - name: has_orders
+      applies_to: [customers]
+      definition: "id IN (SELECT DISTINCT user_id FROM orders)"
+      description: "Customers who have placed at least one order"
+      aliases: ["has_purchased", "converted"]
+
+    - name: never_ordered
+      applies_to: [customers]
+      definition: "id NOT IN (SELECT DISTINCT user_id FROM orders)"
+      description: "Customers who have never placed an order"
+      aliases: ["no_orders", "not_converted"]
+
+  # ========================================
+  # AGGREGATIONS
+  # ========================================
+  aggregations:
+    - name: total_revenue
+      entity: orders
+      expression: "SUM(total)"
+      description: "Sum of all order totals"
+      aliases: ["revenue", "sales", "total_sales"]
+
+    - name: order_count
+      entity: orders
+      expression: "COUNT(*)"
+      description: "Number of orders"
+      aliases: ["number_of_orders", "orders_count", "num_orders"]
+
+    - name: average_order_value
+      entity: orders
+      expression: "AVG(total)"
+      description: "Average order value"
+      aliases: ["aov", "avg_order", "average_order"]
+
+    - name: customer_count
+      entity: customers
+      expression: "COUNT(DISTINCT id)"
+      description: "Number of unique customers"
+      aliases: ["num_customers", "total_customers"]
+
+# ========================================
+# SECURITY
+# ========================================
+security:
+  mode: read_only
+  
+  allowed_tables:
+    - users
+    - products
+    - categories
+    - orders
+    - order_items
+    - reviews
+  
+  blocked_columns:
+    - users.password_hash
+    - users.password_salt
+    - users.api_token
+    - users.reset_token
+    - users.remember_token
+  
+  max_rows: 1000
+  timeout_seconds: 30
+  max_join_depth: 5
+
+# ========================================
+# LLM CONFIGURATION
+# ========================================
+llm:
+  provider: openai
+  openai:
+    api_key: ${OPENAI_API_KEY}
+    model: gpt-4o
+    temperature: 0
+
+# ========================================
+# CACHING
+# ========================================
+cache:
+  enabled: true
+  backend: memory
+  ttl_seconds: 3600
+
+# ========================================
+# PROMPTS (optional customization)
+# ========================================
+prompts:
+  examples:
+    - question: "active customers"
+      sql: "SELECT * FROM users WHERE status = 'active'"
+    
+    - question: "orders this month"
+      sql: "SELECT * FROM orders WHERE created_at >= DATE_TRUNC('month', CURRENT_DATE)"
+    
+    - question: "top 10 customers by revenue"
+      sql: |
+        SELECT u.*, SUM(o.total) as total_revenue
+        FROM users u
+        INNER JOIN orders o ON o.user_id = u.id
+        WHERE o.status NOT IN ('cancelled', 'refunded')
+        GROUP BY u.id
+        ORDER BY total_revenue DESC
+        LIMIT 10
+    
+    - question: "products with no orders"
+      sql: |
+        SELECT p.* FROM products p
+        LEFT JOIN order_items oi ON oi.product_id = p.id
+        WHERE oi.id IS NULL
+    
+    - question: "average order value by month"
+      sql: |
+        SELECT 
+          DATE_TRUNC('month', created_at) as month,
+          AVG(total) as avg_order_value,
+          COUNT(*) as order_count
+        FROM orders
+        WHERE status NOT IN ('cancelled', 'refunded')
+        GROUP BY DATE_TRUNC('month', created_at)
+        ORDER BY month DESC
+
+# ========================================
+# LOGGING
+# ========================================
+logging:
+  level: info
+  log_queries: true
+  log_llm: false
