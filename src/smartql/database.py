@@ -6,7 +6,7 @@ from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
 from smartql.exceptions import DatabaseError
 
@@ -14,6 +14,7 @@ from smartql.exceptions import DatabaseError
 @dataclass
 class QueryPlan:
     """Represents a query execution plan."""
+
     raw_plan: list[dict[str, Any]]
     estimated_cost: float
     estimated_rows: int
@@ -29,22 +30,13 @@ class QueryPlan:
         dialect: str,
         cost_threshold: float = 10000.0,
         row_threshold: int = 100000,
-    ) -> "QueryPlan":
+    ) -> QueryPlan:
         """Parse EXPLAIN output into a QueryPlan."""
-        warnings = []
-        suggestions = []
-        estimated_cost = 0.0
-        estimated_rows = 0
-        plan_type = "unknown"
 
         if dialect in ("postgresql", "postgres"):
-            return cls._parse_postgres_plan(
-                explain_result, cost_threshold, row_threshold
-            )
+            return cls._parse_postgres_plan(explain_result, cost_threshold, row_threshold)
         elif dialect == "mysql":
-            return cls._parse_mysql_plan(
-                explain_result, cost_threshold, row_threshold
-            )
+            return cls._parse_mysql_plan(explain_result, cost_threshold, row_threshold)
         else:
             return cls(
                 raw_plan=explain_result,
@@ -62,7 +54,7 @@ class QueryPlan:
         explain_result: list[dict[str, Any]],
         cost_threshold: float,
         row_threshold: int,
-    ) -> "QueryPlan":
+    ) -> QueryPlan:
         """Parse PostgreSQL EXPLAIN output."""
         warnings = []
         suggestions = []
@@ -77,11 +69,12 @@ class QueryPlan:
                 plan_text = plan["QUERY PLAN"]
                 if "cost=" in plan_text:
                     import re
-                    cost_match = re.search(r'cost=[\d.]+\.\.([\d.]+)', plan_text)
+
+                    cost_match = re.search(r"cost=[\d.]+\.\.([\d.]+)", plan_text)
                     if cost_match:
                         estimated_cost = float(cost_match.group(1))
 
-                    rows_match = re.search(r'rows=(\d+)', plan_text)
+                    rows_match = re.search(r"rows=(\d+)", plan_text)
                     if rows_match:
                         estimated_rows = int(rows_match.group(1))
 
@@ -123,7 +116,7 @@ class QueryPlan:
         explain_result: list[dict[str, Any]],
         cost_threshold: float,
         row_threshold: int,
-    ) -> "QueryPlan":
+    ) -> QueryPlan:
         """Parse MySQL EXPLAIN output."""
         warnings = []
         suggestions = []
@@ -152,9 +145,8 @@ class QueryPlan:
             if "Using temporary" in extra:
                 warnings.append("Query requires temporary table")
 
-        is_acceptable = (
-            estimated_rows < row_threshold
-            and "Full table scan" not in " ".join(warnings)
+        is_acceptable = estimated_rows < row_threshold and "Full table scan" not in " ".join(
+            warnings
         )
 
         return cls(
@@ -172,7 +164,7 @@ class DatabaseConnector(ABC):
     """Abstract base class for database connectors."""
 
     @abstractmethod
-    def execute(self, sql: str, params: Optional[dict] = None) -> list[dict[str, Any]]:
+    def execute(self, sql: str, params: dict | None = None) -> list[dict[str, Any]]:
         """Execute a SQL query and return results as a list of dictionaries."""
         pass
 
@@ -207,12 +199,10 @@ class SQLAlchemyConnector(DatabaseConnector):
 
     def __init__(self, config: dict[str, Any]):
         try:
-            from sqlalchemy import create_engine, text, inspect
+            from sqlalchemy import create_engine, inspect, text
             from sqlalchemy.pool import QueuePool
         except ImportError:
-            raise DatabaseError(
-                "SQLAlchemy is required. Install with: pip install sqlalchemy"
-            )
+            raise DatabaseError("SQLAlchemy is required. Install with: pip install sqlalchemy")
 
         self._text = text
         self._inspect = inspect
@@ -231,8 +221,7 @@ class SQLAlchemyConnector(DatabaseConnector):
                 poolclass=QueuePool,
                 pool_size=pool_config.get("min_connections", 2),
                 max_overflow=(
-                    pool_config.get("max_connections", 10)
-                    - pool_config.get("min_connections", 2)
+                    pool_config.get("max_connections", 10) - pool_config.get("min_connections", 2)
                 ),
                 pool_timeout=pool_config.get("idle_timeout", 300),
                 echo=False,
@@ -280,8 +269,8 @@ class SQLAlchemyConnector(DatabaseConnector):
     def execute(
         self,
         sql: str,
-        params: Optional[dict] = None,
-        timeout: Optional[int] = None,
+        params: dict | None = None,
+        timeout: int | None = None,
     ) -> list[dict[str, Any]]:
         """Execute a SQL query and return results."""
         try:
@@ -372,8 +361,8 @@ class SQLAlchemyConnector(DatabaseConnector):
     def execute_with_validation(
         self,
         sql: str,
-        params: Optional[dict] = None,
-        timeout: Optional[int] = None,
+        params: dict | None = None,
+        timeout: int | None = None,
         reject_expensive: bool = True,
     ) -> tuple[list[dict[str, Any]], QueryPlan]:
         """
@@ -408,31 +397,31 @@ class SQLAlchemyConnector(DatabaseConnector):
             for table_name in inspector.get_table_names():
                 columns = []
                 for col in inspector.get_columns(table_name):
-                    columns.append({
-                        "name": col["name"],
-                        "type": str(col["type"]),
-                        "nullable": col.get("nullable", True),
-                        "default": col.get("default"),
-                        "primary_key": False,
-                    })
+                    columns.append(
+                        {
+                            "name": col["name"],
+                            "type": str(col["type"]),
+                            "nullable": col.get("nullable", True),
+                            "default": col.get("default"),
+                            "primary_key": False,
+                        }
+                    )
 
                 pk_constraint = inspector.get_pk_constraint(table_name)
-                pk_columns = (
-                    pk_constraint.get("constrained_columns", [])
-                    if pk_constraint
-                    else []
-                )
+                pk_columns = pk_constraint.get("constrained_columns", []) if pk_constraint else []
                 for col in columns:
                     if col["name"] in pk_columns:
                         col["primary_key"] = True
 
                 indexes = []
                 for idx in inspector.get_indexes(table_name):
-                    indexes.append({
-                        "name": idx.get("name"),
-                        "columns": idx.get("column_names", []),
-                        "unique": idx.get("unique", False),
-                    })
+                    indexes.append(
+                        {
+                            "name": idx.get("name"),
+                            "columns": idx.get("column_names", []),
+                            "unique": idx.get("unique", False),
+                        }
+                    )
 
                 tables[table_name] = {
                     "columns": columns,
@@ -443,11 +432,13 @@ class SQLAlchemyConnector(DatabaseConnector):
             for table_name in inspector.get_table_names():
                 fks = []
                 for fk in inspector.get_foreign_keys(table_name):
-                    fks.append({
-                        "columns": fk["constrained_columns"],
-                        "referred_table": fk["referred_table"],
-                        "referred_columns": fk["referred_columns"],
-                    })
+                    fks.append(
+                        {
+                            "columns": fk["constrained_columns"],
+                            "referred_table": fk["referred_table"],
+                            "referred_columns": fk["referred_columns"],
+                        }
+                    )
                 if fks:
                     foreign_keys[table_name] = fks
 
@@ -503,17 +494,13 @@ class SQLAlchemyConnector(DatabaseConnector):
             for table, col in where_columns + join_columns:
                 key = f"{table}.{col}"
                 if key not in seen:
-                    suggestions.append(
-                        f"CREATE INDEX idx_{table}_{col} ON {table}({col})"
-                    )
+                    suggestions.append(f"CREATE INDEX idx_{table}_{col} ON {table}({col})")
                     seen.add(key)
 
             if order_columns and len(order_columns) <= 3:
                 cols = ", ".join(col for _, col in order_columns)
                 table = order_columns[0][0]
-                suggestions.append(
-                    f"CREATE INDEX idx_{table}_order ON {table}({cols})"
-                )
+                suggestions.append(f"CREATE INDEX idx_{table}_order ON {table}({cols})")
 
         except Exception:
             pass
@@ -551,7 +538,7 @@ class MockConnector(DatabaseConnector):
         """Set mock schema."""
         self._mock_schema = schema
 
-    def execute(self, sql: str, params: Optional[dict] = None) -> list[dict[str, Any]]:
+    def execute(self, sql: str, params: dict | None = None) -> list[dict[str, Any]]:
         """Execute a mock query."""
         sql_upper = sql.upper()
         if "SELECT" in sql_upper:

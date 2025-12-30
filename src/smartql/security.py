@@ -5,18 +5,17 @@ Security validator using sqlglot for robust SQL parsing and validation.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import sqlglot
 from sqlglot import exp
 from sqlglot.errors import ParseError
 
-from smartql.exceptions import SecurityError
-
 
 @dataclass
 class SecurityConfig:
     """Security configuration for query validation."""
+
     mode: str = "read_only"
     allowed_tables: set[str] = field(default_factory=set)
     blocked_tables: set[str] = field(default_factory=set)
@@ -31,7 +30,7 @@ class SecurityConfig:
     max_complexity: int = 100
 
     @classmethod
-    def from_dict(cls, config: dict[str, Any]) -> "SecurityConfig":
+    def from_dict(cls, config: dict[str, Any]) -> SecurityConfig:
         """Create config from dictionary."""
         return cls(
             mode=config.get("mode", "read_only"),
@@ -58,14 +57,14 @@ class SQLAnalyzer:
     def __init__(self, dialect: str = "postgres"):
         self.dialect = dialect
 
-    def parse(self, sql: str) -> Optional[exp.Expression]:
+    def parse(self, sql: str) -> exp.Expression | None:
         """Parse SQL and return AST."""
         try:
             return sqlglot.parse_one(sql, dialect=self.dialect)
         except ParseError:
             return None
 
-    def get_statement_type(self, sql: str) -> Optional[str]:
+    def get_statement_type(self, sql: str) -> str | None:
         """Get the type of SQL statement (SELECT, INSERT, UPDATE, etc.)."""
         ast = self.parse(sql)
         if ast is None:
@@ -155,7 +154,7 @@ class SQLAnalyzer:
             return False
         return isinstance(ast, exp.Union) or len(list(ast.find_all(exp.Union))) > 0
 
-    def get_limit(self, sql: str) -> Optional[int]:
+    def get_limit(self, sql: str) -> int | None:
         """Get the LIMIT value if present."""
         ast = self.parse(sql)
         if ast is None:
@@ -245,9 +244,7 @@ class SecurityValidator:
 
         if self.config.mode == "read_only":
             if stmt_type and stmt_type not in ("SELECT",):
-                errors.append(
-                    f"{stmt_type} statements not allowed in read-only mode"
-                )
+                errors.append(f"{stmt_type} statements not allowed in read-only mode")
         return errors
 
     def _check_tables(self, sql: str) -> list[str]:
@@ -336,9 +333,7 @@ class SecurityValidator:
         limit = self.analyzer.get_limit(sql)
 
         if limit is not None and limit > self.config.max_rows:
-            errors.append(
-                f"LIMIT {limit} exceeds maximum allowed rows ({self.config.max_rows})"
-            )
+            errors.append(f"LIMIT {limit} exceeds maximum allowed rows ({self.config.max_rows})")
 
         return errors
 
@@ -388,9 +383,7 @@ class SecurityValidator:
                 continue
 
             column = (
-                filter_config
-                if isinstance(filter_config, str)
-                else filter_config.get("column")
+                filter_config if isinstance(filter_config, str) else filter_config.get("column")
             )
             if not column:
                 continue

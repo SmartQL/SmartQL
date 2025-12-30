@@ -8,19 +8,25 @@ help: ## Show this help
 
 # Development
 install: ## Install dependencies
-	uv pip install -e "."
+	uv sync
 
 dev: ## Install with dev dependencies
-	uv pip install -e ".[dev]"
+	uv sync --extra dev
 
 test: ## Run tests
-	pytest tests/ -v
+	uv run pytest tests/ -v
 
 lint: ## Run linter
-	ruff check src/
+	uv run ruff check src/ tests/
+
+fix: ## Fix lint issues automatically
+	uv run ruff check src/ tests/ --fix
+	uv run ruff format src/ tests/
 
 format: ## Format code
-	ruff format src/
+	uv run ruff format src/ tests/
+
+check: lint test ## Run lint and tests
 
 # Python packaging
 build: ## Build Python package

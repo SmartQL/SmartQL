@@ -5,7 +5,7 @@ Query result class for representing generated SQL and execution results.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 
 @dataclass
@@ -13,37 +13,37 @@ class QueryResult:
     """
     Represents the result of a natural language to SQL conversion.
     """
-    
+
     # The generated SQL query
     sql: str
-    
+
     # Human-readable explanation of the query
-    explanation: Optional[str] = None
-    
+    explanation: str | None = None
+
     # Confidence score (0.0 to 1.0)
     confidence: float = 0.0
-    
+
     # The original question
-    question: Optional[str] = None
-    
+    question: str | None = None
+
     # Execution results (if executed)
-    rows: Optional[list[dict[str, Any]]] = None
-    row_count: Optional[int] = None
-    
+    rows: list[dict[str, Any]] | None = None
+    row_count: int | None = None
+
     # Validation status
     is_valid: bool = False
     validation_errors: list[str] = field(default_factory=list)
-    
+
     # Execution error (if any)
-    execution_error: Optional[str] = None
-    
+    execution_error: str | None = None
+
     # Timing information
-    generation_time_ms: Optional[float] = None
-    execution_time_ms: Optional[float] = None
-    
+    generation_time_ms: float | None = None
+    execution_time_ms: float | None = None
+
     # Parsed intent (for debugging)
-    intent: Optional[dict[str, Any]] = None
-    
+    intent: dict[str, Any] | None = None
+
     def to_dict(self) -> dict[str, Any]:
         """Convert the result to a dictionary."""
         return {
@@ -60,9 +60,9 @@ class QueryResult:
             "execution_time_ms": self.execution_time_ms,
             "intent": self.intent,
         }
-    
+
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "QueryResult":
+    def from_dict(cls, data: dict[str, Any]) -> QueryResult:
         """Create a QueryResult from a dictionary."""
         return cls(
             sql=data.get("sql", ""),
@@ -78,33 +78,37 @@ class QueryResult:
             execution_time_ms=data.get("execution_time_ms"),
             intent=data.get("intent"),
         )
-    
+
     def to_json(self) -> str:
         """Convert the result to a JSON string."""
         import json
+
         return json.dumps(self.to_dict(), indent=2, default=str)
-    
+
     def to_dataframe(self) -> Any:
         """
         Convert execution results to a pandas DataFrame.
-        
+
         Returns:
             pandas DataFrame (requires pandas to be installed)
         """
         if not self.rows:
             raise ValueError("No execution results available")
-        
+
         try:
             import pandas as pd
+
             return pd.DataFrame(self.rows)
         except ImportError:
-            raise ImportError("pandas is required for to_dataframe(). Install with: pip install pandas")
-    
+            raise ImportError(
+                "pandas is required for to_dataframe(). Install with: pip install pandas"
+            )
+
     @property
     def success(self) -> bool:
         """Check if the query was generated and validated successfully."""
         return self.is_valid and not self.execution_error
-    
+
     def __str__(self) -> str:
         """String representation."""
         lines = [f"SQL: {self.sql}"]
@@ -119,6 +123,6 @@ class QueryResult:
         if self.execution_error:
             lines.append(f"Execution Error: {self.execution_error}")
         return "\n".join(lines)
-    
+
     def __repr__(self) -> str:
         return f"<QueryResult sql='{self.sql[:50]}...' valid={self.is_valid}>"

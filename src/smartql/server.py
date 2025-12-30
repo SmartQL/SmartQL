@@ -10,109 +10,115 @@ Run with:
     smartql serve --port 8000
 """
 
-from fastapi import FastAPI, HTTPException, Depends, Header, BackgroundTasks
-from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
-import os
-import yaml
 import hashlib
+import os
 import time
 from pathlib import Path
+from typing import Any, Optional
+
+import yaml
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
 from .core import SmartQL
-from .exceptions import SmartQLError, SecurityError, LLMError, SchemaError
-
+from .exceptions import LLMError, SchemaError, SecurityError, SmartQLError
 
 # =============================================================================
 # Pydantic Models
 # =============================================================================
 
+
 class AskRequest(BaseModel):
     """Request model for the /ask endpoint."""
+
     question: str = Field(..., description="Natural language question")
-    context: Optional[Dict[str, Any]] = Field(None, description="Additional context for the query")
+    context: Optional[dict[str, Any]] = Field(None, description="Additional context for the query")
     execute: bool = Field(False, description="Whether to execute the query")
     explain: bool = Field(False, description="Include query explanation")
-    
+
     class Config:
         json_schema_extra = {
             "example": {
                 "question": "Show me all active users with orders this month",
                 "context": {"tenant_id": 123},
                 "execute": False,
-                "explain": True
+                "explain": True,
             }
         }
 
 
 class AskResponse(BaseModel):
     """Response model for the /ask endpoint."""
+
     sql: str
     explanation: Optional[str] = None
     confidence: Optional[float] = None
-    rows: Optional[List[Dict[str, Any]]] = None
+    rows: Optional[list[dict[str, Any]]] = None
     row_count: Optional[int] = None
     execution_time_ms: Optional[float] = None
-    validation_errors: List[str] = []
+    validation_errors: list[str] = []
     cached: bool = False
 
 
 class ValidateRequest(BaseModel):
     """Request model for the /validate endpoint."""
+
     sql: str = Field(..., description="SQL query to validate")
-    
+
     class Config:
-        json_schema_extra = {
-            "example": {
-                "sql": "SELECT * FROM users WHERE status = 'active'"
-            }
-        }
+        json_schema_extra = {"example": {"sql": "SELECT * FROM users WHERE status = 'active'"}}
 
 
 class ValidateResponse(BaseModel):
     """Response model for the /validate endpoint."""
+
     valid: bool
-    errors: List[str] = []
+    errors: list[str] = []
 
 
 class SchemaUploadRequest(BaseModel):
     """Request model for uploading a YAML schema."""
+
     yaml_content: str = Field(..., description="YAML schema content")
     schema_id: Optional[str] = Field(None, description="Custom schema ID")
 
 
 class SchemaResponse(BaseModel):
     """Response model for schema operations."""
+
     schema_id: str
-    entities: List[str]
+    entities: list[str]
     relationships_count: int
     business_rules_count: int
 
 
 class IntrospectRequest(BaseModel):
     """Request model for database introspection."""
+
     connection_url: str = Field(..., description="Database connection URL")
     include_views: bool = Field(False, description="Include database views")
-    
+
     class Config:
         json_schema_extra = {
             "example": {
                 "connection_url": "postgresql://user:pass@localhost/mydb",
-                "include_views": False
+                "include_views": False,
             }
         }
 
 
 class IntrospectResponse(BaseModel):
     """Response model for introspection."""
+
     yaml_content: str
-    tables: List[str]
+    tables: list[str]
     columns_count: int
 
 
 class HealthResponse(BaseModel):
     """Response model for health check."""
+
     status: str
     version: str
     schemas_loaded: int
@@ -128,7 +134,7 @@ app = FastAPI(
     description="Natural language to SQL translation engine",
     version="1.0.0",
     docs_url="/docs",
-    redoc_url="/redoc"
+    redoc_url="/redoc",
 )
 
 # CORS middleware for cross-origin requests
@@ -142,13 +148,14 @@ app.add_middleware(
 
 # Global state
 _start_time = time.time()
-_schemas: Dict[str, SmartQL] = {}
+_schemas: dict[str, SmartQL] = {}
 _default_schema_id: Optional[str] = None
 
 
 # =============================================================================
 # Startup & Dependencies
 # =============================================================================
+
 
 @app.on_event("startup")
 async def startup_event():
@@ -180,8 +187,8 @@ def get_schema_id(x_schema_id: Optional[str] = Header(None)) -> str:
     schema_id = x_schema_id or _default_schema_id
     if not schema_id:
         raise HTTPException(
-            status_code=400, 
-            detail="No schema loaded. Upload a schema first or set X-Schema-ID header."
+            status_code=400,
+            detail="No schema loaded. Upload a schema first or set X-Schema-ID header.",
         )
     if schema_id not in _schemas:
         raise HTTPException(status_code=404, detail=f"Schema '{schema_id}' not found")
@@ -192,6 +199,7 @@ def get_schema_id(x_schema_id: Optional[str] = Header(None)) -> str:
 # Endpoints
 # =============================================================================
 
+
 @app.get("/", response_model=HealthResponse)
 async def root():
     """Health check and server info."""
@@ -199,7 +207,7 @@ async def root():
         status="healthy",
         version="1.0.0",
         schemas_loaded=len(_schemas),
-        uptime_seconds=time.time() - _start_time
+        uptime_seconds=time.time() - _start_time,
     )
 
 
@@ -210,27 +218,20 @@ async def health_check():
 
 
 @app.post("/ask", response_model=AskResponse, dependencies=[Depends(get_api_key)])
-async def ask(
-    request: AskRequest,
-    schema_id: str = Depends(get_schema_id)
-):
+async def ask(request: AskRequest, schema_id: str = Depends(get_schema_id)):
     """
     Convert natural language question to SQL query.
-    
+
     Optionally execute the query and return results.
     """
     qw = _schemas[schema_id]
     start_time = time.time()
-    
+
     try:
-        result = qw.ask(
-            question=request.question,
-            context=request.context,
-            execute=request.execute
-        )
-        
+        result = qw.ask(question=request.question, context=request.context, execute=request.execute)
+
         execution_time = (time.time() - start_time) * 1000
-        
+
         return AskResponse(
             sql=result.sql,
             explanation=result.explanation if request.explain else None,
@@ -239,9 +240,9 @@ async def ask(
             row_count=len(result.rows) if result.rows else None,
             execution_time_ms=execution_time,
             validation_errors=result.validation_errors,
-            cached=result.cached if hasattr(result, 'cached') else False
+            cached=result.cached if hasattr(result, "cached") else False,
         )
-        
+
     except SecurityError as e:
         raise HTTPException(status_code=403, detail=str(e))
     except LLMError as e:
@@ -251,21 +252,15 @@ async def ask(
 
 
 @app.post("/validate", response_model=ValidateResponse, dependencies=[Depends(get_api_key)])
-async def validate(
-    request: ValidateRequest,
-    schema_id: str = Depends(get_schema_id)
-):
+async def validate(request: ValidateRequest, schema_id: str = Depends(get_schema_id)):
     """
     Validate a SQL query against security rules.
     """
     qw = _schemas[schema_id]
-    
+
     try:
         errors = qw.validate(request.sql)
-        return ValidateResponse(
-            valid=len(errors) == 0,
-            errors=errors
-        )
+        return ValidateResponse(valid=len(errors) == 0, errors=errors)
     except SmartQLError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -274,40 +269,40 @@ async def validate(
 async def upload_schema(request: SchemaUploadRequest):
     """
     Upload a YAML schema configuration.
-    
+
     Returns a schema ID that can be used in subsequent requests.
     """
     try:
         # Parse YAML to validate it
         config = yaml.safe_load(request.yaml_content)
-        
+
         # Generate schema ID
         if request.schema_id:
             schema_id = request.schema_id
         else:
             schema_id = hashlib.sha256(request.yaml_content.encode()).hexdigest()[:12]
-        
+
         # Create SmartQL instance
         qw = SmartQL.from_dict(config)
         _schemas[schema_id] = qw
-        
+
         # Set as default if first schema
         global _default_schema_id
         if _default_schema_id is None:
             _default_schema_id = schema_id
-        
+
         # Gather stats
         entities = list(qw.schema.entities.keys()) if qw.schema else []
         relationships = len(qw.schema.relationships) if qw.schema else 0
         rules = len(qw.schema.business_rules) if qw.schema else 0
-        
+
         return SchemaResponse(
             schema_id=schema_id,
             entities=entities,
             relationships_count=relationships,
-            business_rules_count=rules
+            business_rules_count=rules,
         )
-        
+
     except yaml.YAMLError as e:
         raise HTTPException(status_code=400, detail=f"Invalid YAML: {str(e)}")
     except SchemaError as e:
@@ -321,17 +316,17 @@ async def get_schema(schema_id: str):
     """Get information about a loaded schema."""
     if schema_id not in _schemas:
         raise HTTPException(status_code=404, detail=f"Schema '{schema_id}' not found")
-    
+
     qw = _schemas[schema_id]
     entities = list(qw.schema.entities.keys()) if qw.schema else []
     relationships = len(qw.schema.relationships) if qw.schema else 0
     rules = len(qw.schema.business_rules) if qw.schema else 0
-    
+
     return SchemaResponse(
         schema_id=schema_id,
         entities=entities,
         relationships_count=relationships,
-        business_rules_count=rules
+        business_rules_count=rules,
     )
 
 
@@ -339,15 +334,15 @@ async def get_schema(schema_id: str):
 async def delete_schema(schema_id: str):
     """Remove a loaded schema."""
     global _default_schema_id
-    
+
     if schema_id not in _schemas:
         raise HTTPException(status_code=404, detail=f"Schema '{schema_id}' not found")
-    
+
     del _schemas[schema_id]
-    
+
     if _default_schema_id == schema_id:
         _default_schema_id = next(iter(_schemas.keys()), None)
-    
+
     return {"message": f"Schema '{schema_id}' deleted"}
 
 
@@ -357,11 +352,13 @@ async def list_schemas():
     schemas = []
     for schema_id, qw in _schemas.items():
         entities = list(qw.schema.entities.keys()) if qw.schema else []
-        schemas.append({
-            "schema_id": schema_id,
-            "entities": entities,
-            "is_default": schema_id == _default_schema_id
-        })
+        schemas.append(
+            {
+                "schema_id": schema_id,
+                "entities": entities,
+                "is_default": schema_id == _default_schema_id,
+            }
+        )
     return {"schemas": schemas, "count": len(schemas)}
 
 
@@ -375,86 +372,70 @@ async def introspect(request: IntrospectRequest):
     """
     try:
         from .database import create_connector
-        
+
         connector = create_connector(request.connection_url)
-        
+
         # Get table info
         tables_info = connector.introspect()
-        
+
         # Generate YAML
         yaml_content = _generate_yaml_from_introspection(
-            tables_info, 
-            request.connection_url,
-            request.include_views
+            tables_info, request.connection_url, request.include_views
         )
-        
+
         tables = list(tables_info.keys())
         columns_count = sum(len(cols) for cols in tables_info.values())
-        
+
         return IntrospectResponse(
-            yaml_content=yaml_content,
-            tables=tables,
-            columns_count=columns_count
+            yaml_content=yaml_content, tables=tables, columns_count=columns_count
         )
-        
+
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
 
 def _generate_yaml_from_introspection(
-    tables_info: Dict[str, List[Dict]], 
-    connection_url: str,
-    include_views: bool = False
+    tables_info: dict[str, list[dict]], connection_url: str, include_views: bool = False
 ) -> str:
     """Generate YAML schema from introspection data."""
     entities = {}
-    
+
     for table_name, columns in tables_info.items():
         entity = {
             "table": table_name,
             "description": f"Auto-generated entity for {table_name}",
-            "columns": {}
+            "columns": {},
         }
-        
+
         for col in columns:
             col_config = {
                 "type": col.get("type", "string"),
-                "description": col.get("comment") or f"Column {col['name']}"
+                "description": col.get("comment") or f"Column {col['name']}",
             }
-            
+
             if col.get("primary"):
                 col_config["primary"] = True
-            if col.get("nullable") == False:
+            if not col.get("nullable"):
                 col_config["nullable"] = False
-                
+
             entity["columns"][col["name"]] = col_config
-        
+
         entities[table_name] = entity
-    
+
     config = {
         "version": "1.0",
         "database": {
             "type": _infer_db_type(connection_url),
-            "connection": {
-                "url": "${DATABASE_URL}"
-            }
+            "connection": {"url": "${DATABASE_URL}"},
         },
-        "semantic_layer": {
-            "entities": entities
-        },
-        "security": {
-            "mode": "read_only",
-            "max_rows": 1000
-        },
+        "semantic_layer": {"entities": entities},
+        "security": {"mode": "read_only", "max_rows": 1000},
         "llm": {
             "provider": "openai",
-            "openai": {
-                "api_key": "${OPENAI_API_KEY}",
-                "model": "gpt-4o"
-            }
-        }
+            "openai": {"api_key": "${OPENAI_API_KEY}", "model": "gpt-4o"},
+        },
     }
-    
+
     return yaml.dump(config, default_flow_style=False, sort_keys=False)
 
 
@@ -475,11 +456,9 @@ def _infer_db_type(url: str) -> str:
 # CLI Integration
 # =============================================================================
 
+
 def run_server(
-    host: str = "0.0.0.0",
-    port: int = 8000,
-    reload: bool = False,
-    config: Optional[str] = None
+    host: str = "0.0.0.0", port: int = 8000, reload: bool = False, config: Optional[str] = None
 ):
     """Run the SmartQL API server."""
     import uvicorn
@@ -487,12 +466,7 @@ def run_server(
     if config:
         os.environ["SMARTQL_CONFIG"] = config
 
-    uvicorn.run(
-        "smartql.server:app",
-        host=host,
-        port=port,
-        reload=reload
-    )
+    uvicorn.run("smartql.server:app", host=host, port=port, reload=reload)
 
 
 if __name__ == "__main__":

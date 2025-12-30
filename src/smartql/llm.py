@@ -5,13 +5,14 @@ Supports streaming, structured outputs, retries, and fallbacks.
 
 from __future__ import annotations
 
-import json
 import hashlib
+import json
+from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Iterator, Optional
+from typing import Any
 
 import litellm
-from litellm import completion, acompletion
+from litellm import acompletion, completion
 from pydantic import BaseModel
 
 from smartql.exceptions import LLMError
@@ -19,27 +20,29 @@ from smartql.exceptions import LLMError
 
 class SQLResponse(BaseModel):
     """Structured output schema for SQL generation."""
+
     sql: str
     explanation: str
     confidence: float
     tables_used: list[str] = []
-    reasoning: Optional[str] = None
+    reasoning: str | None = None
 
 
 @dataclass
 class LLMConfig:
     """Configuration for the LLM provider."""
+
     model: str = "gpt-4o"
     temperature: float = 0.0
     max_tokens: int = 2000
     timeout: float = 120.0
     num_retries: int = 3
     fallback_models: list[str] = field(default_factory=list)
-    api_key: Optional[str] = None
-    api_base: Optional[str] = None
+    api_key: str | None = None
+    api_base: str | None = None
 
     @classmethod
-    def from_dict(cls, config: dict[str, Any]) -> "LLMConfig":
+    def from_dict(cls, config: dict[str, Any]) -> LLMConfig:
         """Create config from dictionary."""
         provider = config.get("provider", "openai")
         provider_config = config.get(provider, {})
@@ -123,6 +126,7 @@ class LLMProvider:
     def _set_api_key(self, model: str, api_key: str) -> None:
         """Set API key based on model provider."""
         import os
+
         if "anthropic" in model.lower():
             os.environ["ANTHROPIC_API_KEY"] = api_key
         elif "gemini" in model.lower() or "google" in model.lower():
@@ -144,9 +148,9 @@ class LLMProvider:
     def generate(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
+        system_prompt: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Generate a completion synchronously."""
         messages = self._build_messages(prompt, system_prompt)
@@ -170,9 +174,9 @@ class LLMProvider:
     async def agenerate(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None,
-        max_tokens: Optional[int] = None,
+        system_prompt: str | None = None,
+        temperature: float | None = None,
+        max_tokens: int | None = None,
     ) -> str:
         """Generate a completion asynchronously."""
         messages = self._build_messages(prompt, system_prompt)
@@ -194,8 +198,8 @@ class LLMProvider:
     def stream(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None,
+        system_prompt: str | None = None,
+        temperature: float | None = None,
     ) -> Iterator[str]:
         """Stream a completion synchronously."""
         messages = self._build_messages(prompt, system_prompt)
@@ -218,8 +222,8 @@ class LLMProvider:
     async def astream(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
-        temperature: Optional[float] = None,
+        system_prompt: str | None = None,
+        temperature: float | None = None,
     ) -> AsyncIterator[str]:
         """Stream a completion asynchronously."""
         messages = self._build_messages(prompt, system_prompt)
@@ -243,8 +247,8 @@ class LLMProvider:
         self,
         question: str,
         schema_context: str,
-        examples: Optional[list[dict]] = None,
-        custom_system_prompt: Optional[str] = None,
+        examples: list[dict] | None = None,
+        custom_system_prompt: str | None = None,
     ) -> dict[str, Any]:
         """
         Generate SQL from natural language with structured output.
@@ -265,7 +269,7 @@ class LLMProvider:
         self,
         question: str,
         schema_context: str,
-        examples: Optional[list[dict]] = None,
+        examples: list[dict] | None = None,
         num_samples: int = 3,
     ) -> dict[str, Any]:
         """
@@ -282,7 +286,10 @@ class LLMProvider:
     def _supports_structured_output(self) -> bool:
         """Check if model supports structured JSON output."""
         structured_models = [
-            "gpt-4o", "gpt-4-turbo", "gpt-4", "gpt-3.5-turbo",
+            "gpt-4o",
+            "gpt-4-turbo",
+            "gpt-4",
+            "gpt-3.5-turbo",
         ]
         return any(m in self.config.model.lower() for m in structured_models)
 
@@ -332,7 +339,7 @@ class LLMProvider:
     def _build_messages(
         self,
         prompt: str,
-        system_prompt: Optional[str] = None,
+        system_prompt: str | None = None,
     ) -> list[dict[str, str]]:
         """Build messages list for LLM."""
         messages = []
@@ -343,7 +350,8 @@ class LLMProvider:
 
     def _sql_system_prompt(self) -> str:
         """System prompt optimized for SQL generation with chain-of-thought."""
-        return """You are an expert SQL query generator. Convert natural language to safe, accurate SQL.
+        return """You are an expert SQL query generator.
+Convert natural language to safe, accurate SQL.
 
 ## APPROACH
 Use chain-of-thought reasoning:
@@ -377,7 +385,7 @@ Respond with a JSON object:
         self,
         question: str,
         schema_context: str,
-        examples: Optional[list[dict]] = None,
+        examples: list[dict] | None = None,
     ) -> str:
         """Build prompt for SQL generation."""
         parts = [schema_context]
@@ -405,13 +413,13 @@ Respond with a JSON object:
             json_match = re.search(r'\{[\s\S]*"sql"[\s\S]*\}', content)
             if json_match:
                 json_str = json_match.group()
-                json_str = re.sub(r',\s*}', '}', json_str)
+                json_str = re.sub(r",\s*}", "}", json_str)
                 return json.loads(json_str)
         except json.JSONDecodeError:
             pass
 
         sql = content
-        code_match = re.search(r'```(?:sql)?\s*([\s\S]*?)\s*```', content)
+        code_match = re.search(r"```(?:sql)?\s*([\s\S]*?)\s*```", content)
         if code_match:
             sql = code_match.group(1)
 
@@ -426,8 +434,8 @@ Respond with a JSON object:
     def _try_fallbacks(
         self,
         messages: list[dict],
-        temperature: Optional[float],
-        max_tokens: Optional[int],
+        temperature: float | None,
+        max_tokens: int | None,
         original_error: Exception,
     ) -> str:
         """Try fallback models if primary fails."""

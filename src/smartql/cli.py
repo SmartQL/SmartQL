@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
-from typing import Optional
 
 import click
 from prompt_toolkit import prompt
@@ -32,12 +31,14 @@ def main():
 @main.command()
 @click.argument("question")
 @click.option(
-    "-c", "--config",
+    "-c",
+    "--config",
     default="smartql.yml",
     help="Path to configuration file",
 )
 @click.option(
-    "-e", "--execute",
+    "-e",
+    "--execute",
     is_flag=True,
     help="Execute the query and show results",
 )
@@ -56,7 +57,7 @@ def ask(
     question: str,
     config: str,
     execute: bool,
-    env_file: Optional[str],
+    env_file: str | None,
     output_json: bool,
 ):
     """
@@ -68,31 +69,38 @@ def ask(
     try:
         qw = SmartQL.from_yaml(config, env_file=env_file)
         result = qw.ask(question, execute=execute)
-        
+
         if output_json:
             console.print(result.to_json())
             return
-        
+
         # Display SQL
-        console.print(Panel(
-            Syntax(result.sql, "sql", theme="monokai", line_numbers=True),
-            title="Generated SQL",
-            border_style="green",
-        ))
-        
+        console.print(
+            Panel(
+                Syntax(result.sql, "sql", theme="monokai", line_numbers=True),
+                title="Generated SQL",
+                border_style="green",
+            )
+        )
+
         # Display explanation
         if result.explanation:
             console.print(f"\n[dim]Explanation:[/dim] {result.explanation}")
-        
+
         # Display confidence
         if result.confidence:
-            confidence_color = "green" if result.confidence > 0.8 else "yellow" if result.confidence > 0.5 else "red"
+            if result.confidence > 0.8:
+                confidence_color = "green"
+            elif result.confidence > 0.5:
+                confidence_color = "yellow"
+            else:
+                confidence_color = "red"
             console.print(f"[dim]Confidence:[/dim] [{confidence_color}]{result.confidence:.0%}[/]")
-        
+
         # Display results if executed
         if execute and result.rows:
             console.print(f"\n[dim]Results ({result.row_count} rows):[/dim]")
-            
+
             if result.rows:
                 table = Table()
                 # Add columns
@@ -101,31 +109,33 @@ def ask(
                 # Add rows (limit to 20 for display)
                 for row in result.rows[:20]:
                     table.add_row(*[str(v) for v in row.values()])
-                
+
                 console.print(table)
-                
+
                 if result.row_count and result.row_count > 20:
                     console.print(f"[dim]... and {result.row_count - 20} more rows[/dim]")
-        
+
         if result.execution_error:
             console.print(f"\n[red]Execution Error:[/red] {result.execution_error}")
 
     except SmartQLError as e:
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
-    except FileNotFoundError as e:
+    except FileNotFoundError:
         console.print(f"[red]Configuration file not found:[/red] {config}")
         sys.exit(1)
 
 
 @main.command()
 @click.option(
-    "--connection", "-c",
+    "--connection",
+    "-c",
     required=True,
     help="Database connection URL",
 )
 @click.option(
-    "--output", "-o",
+    "--output",
+    "-o",
     default="smartql.yml",
     help="Output file path",
 )
@@ -139,9 +149,7 @@ def introspect(connection: str, output: str):
     try:
         from smartql.database import SQLAlchemyConnector
 
-        connector = SQLAlchemyConnector({
-            "connection": {"url": connection}
-        })
+        connector = SQLAlchemyConnector({"connection": {"url": connection}})
 
         if not connector.test_connection():
             console.print("[red]Failed to connect to database[/red]")
@@ -158,20 +166,22 @@ def introspect(connection: str, output: str):
             schema=Schema(),
             database=connector,
         )
-        
+
         yaml_content = qw._generate_yaml_from_schema(schema_info)
-        
+
         Path(output).write_text(yaml_content)
         console.print(f"[green]Generated configuration file:[/green] {output}")
-        
+
         # Show summary
         tables = schema_info.get("tables", {})
         console.print(f"\n[dim]Found {len(tables)} tables:[/dim]")
         for table_name in tables.keys():
             console.print(f"  - {table_name}")
-        
-        console.print(f"\n[yellow]Remember to edit {output} to add descriptions and business rules![/yellow]")
-        
+
+        console.print(
+            f"\n[yellow]Remember to edit {output} to add descriptions and business rules![/yellow]"
+        )
+
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
@@ -179,7 +189,8 @@ def introspect(connection: str, output: str):
 
 @main.command()
 @click.option(
-    "-c", "--config",
+    "-c",
+    "--config",
     default="smartql.yml",
     help="Path to configuration file",
 )
@@ -192,21 +203,21 @@ def validate(config: str):
     """
     try:
         from smartql.schema import Schema
-        
+
         schema = Schema.from_yaml(config)
         errors = schema.validate()
-        
+
         if errors:
             console.print("[red]Validation errors found:[/red]")
             for error in errors:
                 console.print(f"  - {error}")
             sys.exit(1)
         else:
-            console.print(f"[green]Configuration is valid![/green]")
+            console.print("[green]Configuration is valid![/green]")
             console.print(f"\n[dim]Entities:[/dim] {len(schema.entities)}")
             console.print(f"[dim]Relationships:[/dim] {len(schema.relationships)}")
             console.print(f"[dim]Business Rules:[/dim] {len(schema.business_rules)}")
-            
+
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
@@ -214,7 +225,8 @@ def validate(config: str):
 
 @main.command()
 @click.option(
-    "-c", "--config",
+    "-c",
+    "--config",
     default="smartql.yml",
     help="Path to configuration file",
 )
@@ -223,7 +235,7 @@ def validate(config: str):
     default=None,
     help="Path to .env file",
 )
-def shell(config: str, env_file: Optional[str]):
+def shell(config: str, env_file: str | None):
     """
     Start an interactive query shell.
 
@@ -235,12 +247,14 @@ def shell(config: str, env_file: Optional[str]):
 
         def print_banner():
             console.clear()
-            console.print(Panel(
-                "[bold]SmartQL Interactive Shell[/bold]\n\n"
-                "Enter natural language questions to generate SQL.\n"
-                "Commands: [dim]/help, /schema, /execute, /clear, /quit[/dim]",
-                border_style="blue",
-            ))
+            console.print(
+                Panel(
+                    "[bold]SmartQL Interactive Shell[/bold]\n\n"
+                    "Enter natural language questions to generate SQL.\n"
+                    "Commands: [dim]/help, /schema, /execute, /clear, /quit[/dim]",
+                    border_style="blue",
+                )
+            )
 
         print_banner()
         execute_mode = False
@@ -249,18 +263,18 @@ def shell(config: str, env_file: Optional[str]):
         while True:
             try:
                 question = prompt("\n> ", history=history)
-                
+
                 if not question.strip():
                     continue
-                
+
                 # Handle commands
                 if question.startswith("/"):
                     cmd = question.lower().strip()
-                    
+
                     if cmd in ("/quit", "/exit", "/q"):
                         console.print("[dim]Goodbye![/dim]")
                         break
-                    
+
                     elif cmd == "/help":
                         console.print("""
 [bold]Commands:[/bold]
@@ -273,40 +287,40 @@ def shell(config: str, env_file: Optional[str]):
 
                     elif cmd == "/clear":
                         print_banner()
-                    
+
                     elif cmd == "/schema":
                         console.print(qw.generator._get_schema_context())
-                    
+
                     elif cmd == "/execute":
                         execute_mode = not execute_mode
                         status = "ON" if execute_mode else "OFF"
                         console.print(f"[dim]Auto-execute mode: {status}[/dim]")
-                    
+
                     else:
                         console.print(f"[yellow]Unknown command: {cmd}[/yellow]")
-                    
+
                     continue
-                
+
                 # Generate SQL
                 result = qw.ask(question, execute=execute_mode)
-                
+
                 console.print(Syntax(result.sql, "sql", theme="monokai"))
-                
+
                 if result.explanation:
                     console.print(f"[dim]{result.explanation}[/dim]")
-                
+
                 if execute_mode and result.rows:
                     console.print(f"\n[dim]Results: {result.row_count} rows[/dim]")
                     for row in result.rows[:5]:
                         console.print(f"  {row}")
                     if result.row_count and result.row_count > 5:
                         console.print(f"  [dim]... and {result.row_count - 5} more[/dim]")
-                
+
             except KeyboardInterrupt:
                 console.print("\n[dim]Use /quit to exit[/dim]")
             except SmartQLError as e:
                 console.print(f"[red]Error:[/red] {e}")
-                
+
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
@@ -315,7 +329,8 @@ def shell(config: str, env_file: Optional[str]):
 @main.command()
 @click.argument("sql")
 @click.option(
-    "-c", "--config",
+    "-c",
+    "--config",
     default="smartql.yml",
     help="Path to configuration file",
 )
@@ -329,7 +344,7 @@ def check(sql: str, config: str):
     try:
         qw = SmartQL.from_yaml(config)
         errors = qw.validate(sql)
-        
+
         if errors:
             console.print("[red]Validation failed:[/red]")
             for error in errors:
@@ -337,7 +352,7 @@ def check(sql: str, config: str):
             sys.exit(1)
         else:
             console.print("[green]Query is valid![/green]")
-            
+
     except Exception as e:
         console.print(f"[red]Error:[/red] {e}")
         sys.exit(1)
@@ -345,7 +360,8 @@ def check(sql: str, config: str):
 
 @main.command()
 @click.option(
-    "-c", "--config",
+    "-c",
+    "--config",
     default=None,
     help="Path to configuration file to load on startup",
 )
@@ -371,11 +387,11 @@ def check(sql: str, config: str):
     help="API key for authentication",
 )
 def serve(
-    config: Optional[str],
+    config: str | None,
     host: str,
     port: int,
     reload: bool,
-    api_key: Optional[str],
+    api_key: str | None,
 ):
     """
     Start the SmartQL HTTP API server.
@@ -397,14 +413,16 @@ def serve(
     if api_key:
         os.environ["SMARTQL_API_KEY"] = api_key
 
-    console.print(Panel(
-        f"[bold]SmartQL API Server[/bold]\n\n"
-        f"Host: {host}\n"
-        f"Port: {port}\n"
-        f"Config: {config or 'None (upload via API)'}\n"
-        f"Reload: {'Enabled' if reload else 'Disabled'}",
-        border_style="green",
-    ))
+    console.print(
+        Panel(
+            f"[bold]SmartQL API Server[/bold]\n\n"
+            f"Host: {host}\n"
+            f"Port: {port}\n"
+            f"Config: {config or 'None (upload via API)'}\n"
+            f"Reload: {'Enabled' if reload else 'Disabled'}",
+            border_style="green",
+        )
+    )
 
     console.print(f"\n[dim]API docs available at: http://{host}:{port}/docs[/dim]")
     console.print(f"[dim]Health check: http://{host}:{port}/health[/dim]\n")
