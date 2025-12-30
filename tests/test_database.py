@@ -29,9 +29,7 @@ class TestSQLAlchemyConnectorExecute:
         mock_result.keys.return_value = ["id", "name"]
         mock_result.__iter__ = lambda self: iter([(1, "test")])
 
-        mock_engine.connect.return_value.__enter__ = mock.MagicMock(
-            return_value=mock_connection
-        )
+        mock_engine.connect.return_value.__enter__ = mock.MagicMock(return_value=mock_connection)
         mock_engine.connect.return_value.__exit__ = mock.MagicMock(return_value=False)
         mock_connection.execute.return_value = mock_result
 
@@ -57,9 +55,7 @@ class TestSQLAlchemyConnectorExecute:
         mock_result.keys.return_value = ["id"]
         mock_result.__iter__ = lambda self: iter([])
 
-        mock_engine.connect.return_value.__enter__ = mock.MagicMock(
-            return_value=mock_connection
-        )
+        mock_engine.connect.return_value.__enter__ = mock.MagicMock(return_value=mock_connection)
         mock_engine.connect.return_value.__exit__ = mock.MagicMock(return_value=False)
         mock_connection.execute.return_value = mock_result
 
@@ -81,14 +77,14 @@ class TestSQLAlchemyConnectorExecute:
         mock_result = mock.MagicMock()
         mock_result.returns_rows = True
         mock_result.keys.return_value = ["id", "name", "balance"]
-        mock_result.__iter__ = lambda self: iter([
-            (1, "Alice", 100.50),
-            (2, "Bob", 200.75),
-        ])
-
-        mock_engine.connect.return_value.__enter__ = mock.MagicMock(
-            return_value=mock_connection
+        mock_result.__iter__ = lambda self: iter(
+            [
+                (1, "Alice", 100.50),
+                (2, "Bob", 200.75),
+            ]
         )
+
+        mock_engine.connect.return_value.__enter__ = mock.MagicMock(return_value=mock_connection)
         mock_engine.connect.return_value.__exit__ = mock.MagicMock(return_value=False)
         mock_connection.execute.return_value = mock_result
 

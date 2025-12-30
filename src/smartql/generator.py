@@ -8,21 +8,22 @@ from __future__ import annotations
 import hashlib
 import time
 from dataclasses import dataclass
-from typing import Any, Optional
+from typing import Any
 
-from smartql.schema import Schema
+from smartql.exceptions import LLMError
 from smartql.llm import LLMProvider
-from smartql.security import SecurityValidator
 from smartql.result import QueryResult
-from smartql.exceptions import LLMError, ValidationError
+from smartql.schema import Schema
+from smartql.security import SecurityValidator
 
 
 @dataclass
 class GenerationStats:
     """Statistics about query generation."""
+
     generation_time_ms: float
-    tokens_used: Optional[int] = None
-    model: Optional[str] = None
+    tokens_used: int | None = None
+    model: str | None = None
     cache_hit: bool = False
     consistency_samples: int = 1
 
@@ -37,7 +38,7 @@ class SchemaContextCache:
         self._cache: dict[str, str] = {}
         self._access_times: dict[str, float] = {}
 
-    def get(self, schema_hash: str) -> Optional[str]:
+    def get(self, schema_hash: str) -> str | None:
         """Get cached context by schema hash."""
         if schema_hash in self._cache:
             self._access_times[schema_hash] = time.time()
@@ -59,7 +60,7 @@ class SchemaContextCache:
         del self._cache[oldest]
         del self._access_times[oldest]
 
-    def invalidate(self, schema_hash: Optional[str] = None) -> None:
+    def invalidate(self, schema_hash: str | None = None) -> None:
         """Invalidate cache entries."""
         if schema_hash:
             self._cache.pop(schema_hash, None)
@@ -87,15 +88,15 @@ class QueryGenerator:
     def __init__(
         self,
         schema: Schema,
-        llm: Optional[LLMProvider] = None,
-        security: Optional[SecurityValidator] = None,
-        database: Optional[Any] = None,
+        llm: LLMProvider | None = None,
+        security: SecurityValidator | None = None,
+        database: Any | None = None,
     ):
         self.schema = schema
         self.llm = llm
         self.security = security
         self.database = database
-        self._introspected_schema: Optional[dict] = None
+        self._introspected_schema: dict | None = None
         self._schema_hash = self._compute_schema_hash()
 
     def _compute_schema_hash(self) -> str:
@@ -106,7 +107,7 @@ class QueryGenerator:
     def generate(
         self,
         question: str,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
         use_consistency: bool = False,
         consistency_samples: int = 3,
         validate: bool = True,
@@ -293,6 +294,7 @@ Return suggestions as a JSON array of strings."""
                 system_prompt="You are a SQL optimization expert. Return only valid JSON.",
             )
             import json
+
             return json.loads(response)
         except Exception:
             return []
@@ -313,7 +315,8 @@ Return suggestions as a JSON array of strings."""
         prompt = f"""Given this database schema:
 {schema_context}
 
-Decompose this complex question into simpler sub-questions that can be answered with individual SQL queries:
+Decompose this complex question into simpler sub-questions that can be answered
+with individual SQL queries:
 
 Question: {question}
 
@@ -334,7 +337,8 @@ Example:
             )
             import json
             import re
-            json_match = re.search(r'\[[\s\S]*\]', response)
+
+            json_match = re.search(r"\[[\s\S]*\]", response)
             if json_match:
                 return json.loads(json_match.group())
         except Exception:

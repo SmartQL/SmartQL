@@ -4,20 +4,20 @@ Core SmartQL class - the main entry point for natural language to SQL conversion
 
 from __future__ import annotations
 
-import os
+from collections.abc import AsyncIterator, Iterator
 from pathlib import Path
-from typing import Any, AsyncIterator, Iterator, Optional, Union
+from typing import Any
 
 from dotenv import load_dotenv
 
-from smartql.schema import Schema
-from smartql.database import DatabaseConnector, QueryPlan, create_connector
-from smartql.llm import LLMProvider, create_llm_provider
-from smartql.generator import QueryGenerator
-from smartql.security import SecurityValidator
-from smartql.result import QueryResult
 from smartql.cache import CacheBackend, create_cache
+from smartql.database import DatabaseConnector, QueryPlan, create_connector
 from smartql.exceptions import SmartQLError, ValidationError
+from smartql.generator import QueryGenerator
+from smartql.llm import LLMProvider, create_llm_provider
+from smartql.result import QueryResult
+from smartql.schema import Schema
+from smartql.security import SecurityValidator
 
 
 class SmartQL:
@@ -42,9 +42,9 @@ class SmartQL:
     def __init__(
         self,
         schema: Schema,
-        database: Optional[DatabaseConnector] = None,
-        llm: Optional[LLMProvider] = None,
-        cache: Optional[CacheBackend] = None,
+        database: DatabaseConnector | None = None,
+        llm: LLMProvider | None = None,
+        cache: CacheBackend | None = None,
     ):
         """
         Initialize SmartQL with a schema and optional components.
@@ -70,15 +70,20 @@ class SmartQL:
             database=database,
         )
 
-        self._validate_queries = schema.validation.get("explain_queries", False) if hasattr(schema, 'validation') and schema.validation else False
-        self._reject_expensive = schema.validation.get("reject_expensive", True) if hasattr(schema, 'validation') and schema.validation else True
+        has_validation = hasattr(schema, "validation") and schema.validation
+        self._validate_queries = (
+            schema.validation.get("explain_queries", False) if has_validation else False
+        )
+        self._reject_expensive = (
+            schema.validation.get("reject_expensive", True) if has_validation else True
+        )
 
     @classmethod
     def from_yaml(
         cls,
-        path: Union[str, Path],
-        env_file: Optional[Union[str, Path]] = None,
-    ) -> "SmartQL":
+        path: str | Path,
+        env_file: str | Path | None = None,
+    ) -> SmartQL:
         """
         Create a SmartQL instance from a YAML configuration file.
 
@@ -116,7 +121,7 @@ class SmartQL:
         )
 
     @classmethod
-    def from_dict(cls, config: dict[str, Any]) -> "SmartQL":
+    def from_dict(cls, config: dict[str, Any]) -> SmartQL:
         """
         Create a SmartQL instance from a dictionary configuration.
         """
@@ -147,7 +152,7 @@ class SmartQL:
         *,
         execute: bool = False,
         validate_only: bool = False,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
         use_consistency: bool = False,
         consistency_samples: int = 3,
         explain_before_execute: bool = False,
@@ -226,7 +231,7 @@ class SmartQL:
     def stream_ask(
         self,
         question: str,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ) -> Iterator[str]:
         """
         Stream the SQL generation process.
@@ -256,7 +261,7 @@ class SmartQL:
         question: str,
         *,
         execute: bool = False,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ) -> QueryResult:
         """
         Async version of ask().
@@ -305,7 +310,7 @@ class SmartQL:
     async def astream_ask(
         self,
         question: str,
-        context: Optional[dict[str, Any]] = None,
+        context: dict[str, Any] | None = None,
     ) -> AsyncIterator[str]:
         """
         Async streaming version of ask().
@@ -401,9 +406,7 @@ class SmartQL:
         if explain_first:
             plan = self.database.explain(sql)
             if not plan.is_acceptable and self._reject_expensive:
-                raise ValidationError(
-                    f"Query rejected: {'; '.join(plan.warnings)}"
-                )
+                raise ValidationError(f"Query rejected: {'; '.join(plan.warnings)}")
 
         return self.database.execute(sql)
 
@@ -416,7 +419,7 @@ class SmartQL:
 
         return self.database.introspect()
 
-    def generate_yaml(self, output_path: Optional[Union[str, Path]] = None) -> str:
+    def generate_yaml(self, output_path: str | Path | None = None) -> str:
         """
         Generate YAML configuration from database introspection.
         """
@@ -431,9 +434,10 @@ class SmartQL:
 
         return yaml_content
 
-    def _cache_key(self, question: str, context: Optional[dict] = None) -> str:
+    def _cache_key(self, question: str, context: dict | None = None) -> str:
         """Generate a cache key for a question."""
         import hashlib
+
         key_parts = [question]
         if context:
             key_parts.append(str(sorted(context.items())))
@@ -447,7 +451,10 @@ class SmartQL:
         tables_data = schema_info.get("tables", {})
 
         for table_name, table_info in tables_data.items():
-            columns_list = table_info.get("columns", table_info) if isinstance(table_info, dict) else table_info
+            if isinstance(table_info, dict):
+                columns_list = table_info.get("columns", table_info)
+            else:
+                columns_list = table_info
             if isinstance(columns_list, dict):
                 columns_list = columns_list.get("columns", [])
 
@@ -522,4 +529,5 @@ class SmartQL:
 
     def __repr__(self) -> str:
         entities = len(self.schema.entities) if self.schema.entities else 0
-        return f"<SmartQL entities={entities} llm={self.llm.__class__.__name__ if self.llm else None}>"
+        llm_name = self.llm.__class__.__name__ if self.llm else None
+        return f"<SmartQL entities={entities} llm={llm_name}>"
