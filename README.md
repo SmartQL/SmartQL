@@ -50,9 +50,9 @@ SmartQL is a Python library that converts natural language questions into SQL qu
 pip install smartql
 ```
 
-Or with [Rye](https://rye-up.com):
+Or with [uv](https://github.com/astral-sh/uv):
 ```bash
-rye add smartql
+uv pip install smartql
 ```
 
 ## Quick Start

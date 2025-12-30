@@ -40,17 +40,10 @@ htmlcov/
 .tox/
 .nox/
 
-# Rye
-.python-version
-
 # Environment
 .env
 .env.local
 *.local.yml
-
-# Test files
-test_*.py
-test_*.yml
 
 # OS
 .DS_Store
@@ -59,7 +52,6 @@ Thumbs.db
 # Logs
 *.log
 
-# Build artifacts
-*.lock
-!requirements.lock
-!requirements-dev.lock
+# uv
+uv.lock
+.python-version
