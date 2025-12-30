@@ -16,16 +16,21 @@ from smartql.exceptions import SchemaError
 
 
 def _interpolate_env_vars(value: Any) -> Any:
-    """Recursively interpolate environment variables in configuration values."""
+    """Recursively interpolate environment variables in configuration values.
+
+    Supports both ${VAR} and ${VAR:-default} syntax.
+    """
     if isinstance(value, str):
-        # Match ${VAR_NAME} pattern
+        # Match ${VAR_NAME} or ${VAR_NAME:-default} pattern
         pattern = r'\$\{([^}]+)\}'
-        
+
         def replace(match: re.Match) -> str:
-            var_name = match.group(1)
-            env_value = os.environ.get(var_name, "")
-            return env_value
-        
+            expr = match.group(1)
+            if ":-" in expr:
+                var_name, default = expr.split(":-", 1)
+                return os.environ.get(var_name, default)
+            return os.environ.get(expr, "")
+
         return re.sub(pattern, replace, value)
     elif isinstance(value, dict):
         return {k: _interpolate_env_vars(v) for k, v in value.items()}

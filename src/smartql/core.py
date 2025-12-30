@@ -212,7 +212,7 @@ class SmartQL:
                     return result
 
             try:
-                rows = self.database.execute(result.sql)
+                rows = self.database.execute(result.sql, params=context)
                 result.rows = rows
                 result.row_count = len(rows)
             except Exception as e:
@@ -294,7 +294,7 @@ class SmartQL:
 
         if execute and self.database and result.is_valid:
             try:
-                rows = self.database.execute(result.sql)
+                rows = self.database.execute(result.sql, params=context)
                 result.rows = rows
                 result.row_count = len(rows)
             except Exception as e:
