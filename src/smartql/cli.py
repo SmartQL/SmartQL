@@ -17,8 +17,82 @@ from rich.table import Table
 
 from smartql import SmartQL
 from smartql.exceptions import SmartQLError
+from smartql.result import FormatType, detect_format_type
 
 console = Console()
+
+
+def display_results(rows: list[dict], format_type: FormatType | None = None) -> None:
+    """Display query results based on format type."""
+    if not rows:
+        console.print("[dim]No results[/dim]")
+        return
+
+    if format_type is None:
+        format_type = detect_format_type(rows)
+
+    if format_type == FormatType.SCALAR:
+        value = list(rows[0].values())[0]
+        if isinstance(value, (int, float)):
+            value = f"{value:,.2f}" if isinstance(value, float) else f"{value:,}"
+        console.print(f"[bold green]{value}[/bold green]")
+
+    elif format_type == FormatType.PAIR:
+        keys = list(rows[0].keys())
+        label, value = rows[0][keys[0]], rows[0][keys[1]]
+        if isinstance(value, (int, float)):
+            value = f"{value:,.2f}" if isinstance(value, float) else f"{value:,}"
+        console.print(f"[bold]{label}:[/bold] [green]{value}[/green]")
+
+    elif format_type == FormatType.RECORD:
+        table = Table(show_header=False, box=None, padding=(0, 2))
+        table.add_column("Field", style="bold")
+        table.add_column("Value", style="green")
+        for key, value in rows[0].items():
+            if isinstance(value, float):
+                value = f"{value:,.2f}"
+            table.add_row(str(key), str(value) if value is not None else "-")
+        console.print(Panel(table, title="Record", border_style="blue"))
+
+    elif format_type == FormatType.LIST:
+        key = list(rows[0].keys())[0]
+        for row in rows[:20]:
+            console.print(f"  • {row[key]}")
+        if len(rows) > 20:
+            console.print(f"  [dim]... and {len(rows) - 20} more[/dim]")
+
+    elif format_type == FormatType.PAIR_LIST:
+        keys = list(rows[0].keys())
+        for row in rows[:20]:
+            label, value = row[keys[0]], row[keys[1]]
+            if isinstance(value, float):
+                value = f"{value:,.2f}"
+            console.print(f"  [bold]{label}:[/bold] {value}")
+        if len(rows) > 20:
+            console.print(f"  [dim]... and {len(rows) - 20} more[/dim]")
+
+    elif format_type == FormatType.TABLE:
+        table = Table()
+        for key in rows[0].keys():
+            table.add_column(str(key))
+        for row in rows[:20]:
+            values = []
+            for v in row.values():
+                if isinstance(v, float):
+                    values.append(f"{v:,.2f}")
+                else:
+                    values.append(str(v) if v is not None else "-")
+            table.add_row(*values)
+        console.print(table)
+        if len(rows) > 20:
+            console.print(f"[dim]... and {len(rows) - 20} more rows[/dim]")
+
+    elif format_type == FormatType.RAW:
+        import json
+
+        console.print(json.dumps(rows[:20], indent=2, default=str))
+        if len(rows) > 20:
+            console.print(f"[dim]... and {len(rows) - 20} more rows[/dim]")
 
 
 @click.group()
@@ -98,22 +172,10 @@ def ask(
             console.print(f"[dim]Confidence:[/dim] [{confidence_color}]{result.confidence:.0%}[/]")
 
         # Display results if executed
-        if execute and result.rows:
-            console.print(f"\n[dim]Results ({result.row_count} rows):[/dim]")
-
-            if result.rows:
-                table = Table()
-                # Add columns
-                for key in result.rows[0].keys():
-                    table.add_column(key)
-                # Add rows (limit to 20 for display)
-                for row in result.rows[:20]:
-                    table.add_row(*[str(v) for v in row.values()])
-
-                console.print(table)
-
-                if result.row_count and result.row_count > 20:
-                    console.print(f"[dim]... and {result.row_count - 20} more rows[/dim]")
+        if execute and result.rows is not None:
+            result.compute_format_type()
+            console.print(f"\n[dim]Results ({result.row_count} rows) - {result.format_type}:[/dim]")
+            display_results(result.rows)
 
         if result.execution_error:
             console.print(f"\n[red]Execution Error:[/red] {result.execution_error}")
@@ -309,12 +371,11 @@ def shell(config: str, env_file: str | None):
                 if result.explanation:
                     console.print(f"[dim]{result.explanation}[/dim]")
 
-                if execute_mode and result.rows:
-                    console.print(f"\n[dim]Results: {result.row_count} rows[/dim]")
-                    for row in result.rows[:5]:
-                        console.print(f"  {row}")
-                    if result.row_count and result.row_count > 5:
-                        console.print(f"  [dim]... and {result.row_count - 5} more[/dim]")
+                if execute_mode and result.rows is not None:
+                    result.compute_format_type()
+                    fmt = result.format_type
+                    console.print(f"\n[dim]Results ({result.row_count} rows) - {fmt}:[/dim]")
+                    display_results(result.rows)
 
             except KeyboardInterrupt:
                 console.print("\n[dim]Use /quit to exit[/dim]")

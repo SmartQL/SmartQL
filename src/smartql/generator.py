@@ -160,6 +160,7 @@ class QueryGenerator:
             confidence=result.get("confidence", 0.0),
             question=question,
             generation_time_ms=generation_time,
+            llm_format_hint=result.get("format"),
             intent={
                 "tables_used": result.get("tables_used", []),
                 "reasoning": result.get("reasoning"),

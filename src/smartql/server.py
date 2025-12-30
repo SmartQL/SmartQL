@@ -36,14 +36,24 @@ class AskRequest(BaseModel):
     context: Optional[dict[str, Any]] = Field(None, description="Additional context for the query")
     execute: bool = Field(False, description="Whether to execute the query")
     explain: bool = Field(False, description="Include query explanation")
+    format_hint: Optional[str] = Field(
+        None,
+        description="Hint for expected result format: scalar, pair, record, list, pair_list, table",
+    )
+    generate_response: bool = Field(
+        False,
+        description="Generate a human-readable response summarizing the results",
+    )
 
     class Config:
         json_schema_extra = {
             "example": {
                 "question": "Show me all active users with orders this month",
                 "context": {"tenant_id": 123},
-                "execute": False,
+                "execute": True,
                 "explain": True,
+                "format_hint": "table",
+                "generate_response": True,
             }
         }
 
@@ -56,6 +66,10 @@ class AskResponse(BaseModel):
     confidence: Optional[float] = None
     rows: Optional[list[dict[str, Any]]] = None
     row_count: Optional[int] = None
+    format_hint: Optional[str] = None
+    llm_format_hint: Optional[str] = None
+    format_type: Optional[str] = None
+    human_response: Optional[str] = None
     execution_time_ms: Optional[float] = None
     validation_errors: list[str] = []
     cached: bool = False
@@ -232,12 +246,33 @@ async def ask(request: AskRequest, schema_id: str = Depends(get_schema_id)):
 
         execution_time = (time.time() - start_time) * 1000
 
+        format_type = None
+        human_response = None
+        row_count = len(result.rows) if result.rows else 0
+
+        if request.execute and result.rows is not None:
+            result.format_hint = request.format_hint
+            result.compute_format_type()
+            format_type = result.format_type
+
+            if request.generate_response and qw.llm:
+                human_response = qw.llm.generate_human_response(
+                    question=request.question,
+                    rows=result.rows,
+                    row_count=row_count,
+                    format_type=format_type,
+                )
+
         return AskResponse(
             sql=result.sql,
             explanation=result.explanation if request.explain else None,
             confidence=result.confidence,
             rows=result.rows if request.execute else None,
-            row_count=len(result.rows) if result.rows else None,
+            row_count=row_count if result.rows else None,
+            format_hint=request.format_hint,
+            llm_format_hint=result.llm_format_hint,
+            format_type=format_type,
+            human_response=human_response,
             execution_time_ms=execution_time,
             validation_errors=result.validation_errors,
             cached=result.cached if hasattr(result, "cached") else False,
