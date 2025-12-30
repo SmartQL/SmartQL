@@ -1,0 +1,15 @@
+services:
+  smartql:
+    image: ghcr.io/smartql/smartql:latest
+    build: .
+    ports:
+      - "5000:8000"
+    volumes:
+      - ./config.yml:/app/config.yml:ro
+    environment:
+      - SMARTQL_CONFIG=/app/config.yml
+      - OPENAI_API_KEY=${OPENAI_API_KEY:-}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - GROQ_API_KEY=${GROQ_API_KEY:-}
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+    restart: unless-stopped
