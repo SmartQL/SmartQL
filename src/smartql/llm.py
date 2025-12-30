@@ -371,6 +371,16 @@ Use chain-of-thought reasoning:
 - Use proper aggregate functions with GROUP BY when needed
 - Qualify all column names with table aliases to avoid ambiguity
 
+## RESULT FORMAT TYPES
+Suggest the best display format for the result based on the question:
+- "scalar": Single value (e.g., "How much total?", "Count of users")
+- "pair": Single label-value pair (e.g., "Top category by spending")
+- "record": Single entity with multiple fields (e.g., "Show user #123 details")
+- "list": Simple list of items (e.g., "List all category names")
+- "pair_list": Key-value pairs (e.g., "Spending by category", "Sales by region")
+- "table": Full tabular data (e.g., "Show all transactions", "List users with details")
+- "raw": Unformatted JSON output
+
 ## OUTPUT FORMAT
 Respond with a JSON object:
 {
@@ -378,7 +388,8 @@ Respond with a JSON object:
     "sql": "The SQL query",
     "explanation": "Brief explanation of what the query does",
     "confidence": 0.0-1.0,
-    "tables_used": ["table1", "table2"]
+    "tables_used": ["table1", "table2"],
+    "format": "suggested format type from the list above"
 }"""
 
     def _build_sql_prompt(
@@ -408,13 +419,15 @@ Respond with a JSON object:
 
         try:
             if content.strip().startswith("{"):
-                return json.loads(content)
+                parsed = json.loads(content)
+                return self._normalize_parsed_response(parsed)
 
             json_match = re.search(r'\{[\s\S]*"sql"[\s\S]*\}', content)
             if json_match:
                 json_str = json_match.group()
                 json_str = re.sub(r",\s*}", "}", json_str)
-                return json.loads(json_str)
+                parsed = json.loads(json_str)
+                return self._normalize_parsed_response(parsed)
         except json.JSONDecodeError:
             pass
 
@@ -429,6 +442,18 @@ Respond with a JSON object:
             "confidence": 0.6,
             "tables_used": [],
             "reasoning": None,
+            "format": None,
+        }
+
+    def _normalize_parsed_response(self, parsed: dict[str, Any]) -> dict[str, Any]:
+        """Normalize parsed LLM response with defaults."""
+        return {
+            "sql": parsed.get("sql", ""),
+            "explanation": parsed.get("explanation"),
+            "confidence": parsed.get("confidence", 0.0),
+            "tables_used": parsed.get("tables_used", []),
+            "reasoning": parsed.get("reasoning"),
+            "format": parsed.get("format"),
         }
 
     def _try_fallbacks(
@@ -482,6 +507,75 @@ Respond with a JSON object:
         if cache_key not in self._schema_context_cache:
             self._schema_context_cache[cache_key] = schema_context
         return self._schema_context_cache[cache_key]
+
+    def generate_human_response(
+        self,
+        question: str,
+        rows: list[dict[str, Any]],
+        row_count: int,
+        format_type: str | None = None,
+    ) -> str:
+        """
+        Generate a human-readable response summarizing query results.
+
+        Args:
+            question: The original natural language question
+            rows: Query result rows (limited sample)
+            row_count: Total number of rows
+            format_type: The detected format type
+
+        Returns:
+            Natural language summary of the results
+        """
+        rows_sample = rows[:10] if rows else []
+        rows_json = json.dumps(rows_sample, indent=2, default=str)
+
+        prompt = f"""Given this question and query results, provide a natural response.
+
+Question: {question}
+
+Results ({row_count} total rows):
+{rows_json}
+
+Format type: {format_type or "unknown"}
+
+Instructions:
+- Respond naturally as if answering the user's question directly
+- Include specific numbers/values from the results
+- Format currency values nicely (e.g., $5,000.00)
+- If there are many results, summarize the key findings
+- Keep the response concise but informative
+- Do not mention SQL, queries, or technical details
+- Do not start with "Based on the results" or similar phrases
+- Just answer the question directly"""
+
+        system_prompt = (
+            "You are a helpful assistant that summarizes data results in natural language. "
+            "Respond conversationally as if directly answering the user's question."
+        )
+
+        try:
+            return self.generate(prompt, system_prompt=system_prompt, max_tokens=500)
+        except Exception:
+            return self._fallback_human_response(rows, row_count, format_type)
+
+    def _fallback_human_response(
+        self,
+        rows: list[dict[str, Any]],
+        row_count: int,
+        format_type: str | None,
+    ) -> str:
+        """Fallback human response when LLM fails."""
+        if not rows:
+            return "No results found."
+
+        if row_count == 1 and len(rows[0]) == 1:
+            value = list(rows[0].values())[0]
+            if isinstance(value, (int, float)):
+                return f"The result is {value:,.2f}."
+            return f"The result is {value}."
+
+        return f"Found {row_count} result{'s' if row_count != 1 else ''}."
 
 
 def create_llm_provider(config: dict[str, Any]) -> LLMProvider:
