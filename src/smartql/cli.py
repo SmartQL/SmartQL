@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import Optional
 
 import click
+from prompt_toolkit import prompt
+from prompt_toolkit.history import InMemoryHistory
 from rich.console import Console
 from rich.panel import Panel
 from rich.syntax import Syntax
@@ -231,18 +233,22 @@ def shell(config: str, env_file: Optional[str]):
     try:
         qw = SmartQL.from_yaml(config, env_file=env_file)
 
-        console.print(Panel(
-            "[bold]SmartQL Interactive Shell[/bold]\n\n"
-            "Enter natural language questions to generate SQL.\n"
-            "Commands: [dim]/help, /schema, /execute, /quit[/dim]",
-            border_style="blue",
-        ))
-        
+        def print_banner():
+            console.clear()
+            console.print(Panel(
+                "[bold]SmartQL Interactive Shell[/bold]\n\n"
+                "Enter natural language questions to generate SQL.\n"
+                "Commands: [dim]/help, /schema, /execute, /clear, /quit[/dim]",
+                border_style="blue",
+            ))
+
+        print_banner()
         execute_mode = False
-        
+        history = InMemoryHistory()
+
         while True:
             try:
-                question = console.input("\n[bold blue]>[/bold blue] ")
+                question = prompt("\n> ", history=history)
                 
                 if not question.strip():
                     continue
@@ -261,8 +267,12 @@ def shell(config: str, env_file: Optional[str]):
   /help     - Show this help
   /schema   - Show the database schema
   /execute  - Toggle auto-execute mode
+  /clear    - Clear the screen
   /quit     - Exit the shell
                         """)
+
+                    elif cmd == "/clear":
+                        print_banner()
                     
                     elif cmd == "/schema":
                         console.print(qw.generator._get_schema_context())

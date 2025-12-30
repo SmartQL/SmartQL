@@ -521,6 +521,7 @@ security:
     - transactions
     - transfers
     - categories
+    - categorizables
     - parties
     - groups
     - recurring_transaction_rules

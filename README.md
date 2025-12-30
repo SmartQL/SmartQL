@@ -251,6 +251,7 @@ In interactive shell mode:
 /help     - Show help
 /schema   - Display database schema
 /execute  - Toggle auto-execute mode
+/clear    - Clear the screen
 /quit     - Exit shell
 ```
 
