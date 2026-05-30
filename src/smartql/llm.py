@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from collections.abc import AsyncIterator, Iterator
 from dataclasses import dataclass, field
 from typing import Any
@@ -16,6 +17,54 @@ from litellm import acompletion, completion
 from pydantic import BaseModel
 
 from smartql.exceptions import LLMError
+
+
+def _as_int(value: Any, default: int) -> int:
+    """Coerce a config value to int, falling back to default when unset or invalid.
+
+    Values from ${VAR} interpolation arrive as strings (e.g. "3"). Passing them
+    unconverted into litellm triggers int/str comparisons that raise TypeError.
+    """
+    if value is None or value == "":
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: Any, default: float) -> float:
+    """Coerce a config value to float, falling back to default when unset or invalid."""
+    if value is None or value == "":
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
+# Standard environment variable each provider's SDK reads its key from. Used to
+# resolve credentials when the config omits api_key, and to expose a configured
+# key to litellm under the name it expects.
+_PROVIDER_KEY_ENV: dict[str, str] = {
+    "openai": "OPENAI_API_KEY",
+    "anthropic": "ANTHROPIC_API_KEY",
+    "claude": "ANTHROPIC_API_KEY",
+    "google": "GEMINI_API_KEY",
+    "gemini": "GEMINI_API_KEY",
+    "groq": "GROQ_API_KEY",
+    "azure": "AZURE_API_KEY",
+    "mistral": "MISTRAL_API_KEY",
+    "cohere": "COHERE_API_KEY",
+    "together": "TOGETHERAI_API_KEY",
+    "deepseek": "DEEPSEEK_API_KEY",
+    "moonshot": "MOONSHOT_API_KEY",
+    "dashscope": "DASHSCOPE_API_KEY",
+    "xai": "XAI_API_KEY",
+}
+
+# Providers that authenticate without a simple API key (local engine or cloud IAM).
+_KEYLESS_PROVIDERS: set[str] = {"ollama", "bedrock", "vertex_ai"}
 
 
 class SQLResponse(BaseModel):
@@ -32,6 +81,7 @@ class SQLResponse(BaseModel):
 class LLMConfig:
     """Configuration for the LLM provider."""
 
+    provider: str = "openai"
     model: str = "gpt-4o"
     temperature: float = 0.0
     max_tokens: int = 2000
@@ -50,14 +100,20 @@ class LLMConfig:
         model = provider_config.get("model") or cls._default_model(provider)
         model_name = cls._normalize_model_name(provider, model)
 
+        # Prefer an explicit api_key, otherwise fall back to the provider's
+        # standard env var (GEMINI_API_KEY, DEEPSEEK_API_KEY, ...). An empty
+        # string from unset ${VAR} interpolation is treated as absent.
+        api_key = provider_config.get("api_key") or os.getenv(_PROVIDER_KEY_ENV.get(provider, ""))
+
         return cls(
+            provider=provider,
             model=model_name,
-            temperature=provider_config.get("temperature", 0.0),
-            max_tokens=provider_config.get("max_tokens", 2000),
-            timeout=provider_config.get("timeout", 120.0),
-            num_retries=config.get("retries", 3),
+            temperature=_as_float(provider_config.get("temperature"), 0.0),
+            max_tokens=_as_int(provider_config.get("max_tokens"), 2000),
+            timeout=_as_float(provider_config.get("timeout"), 120.0),
+            num_retries=_as_int(config.get("retries"), 3),
             fallback_models=config.get("fallback_models", []),
-            api_key=provider_config.get("api_key"),
+            api_key=api_key or None,
             api_base=provider_config.get("api_base") or provider_config.get("base_url"),
         )
 
@@ -67,11 +123,17 @@ class LLMConfig:
         defaults = {
             "openai": "gpt-4o",
             "anthropic": "claude-sonnet-4-20250514",
-            "google": "gemini-pro",
+            "google": "gemini-2.5-flash",
+            "gemini": "gemini-2.5-flash",
             "ollama": "llama3",
             "azure": "gpt-4o",
             "bedrock": "anthropic.claude-3-sonnet-20240229-v1:0",
-            "vertex_ai": "gemini-pro",
+            "vertex_ai": "gemini-2.5-flash",
+            "groq": "llama-3.1-8b-instant",
+            "deepseek": "deepseek-chat",
+            "moonshot": "moonshot-v1-8k",
+            "dashscope": "qwen-plus",
+            "xai": "grok-beta",
         }
         return defaults.get(provider, "gpt-4o")
 
@@ -94,6 +156,10 @@ class LLMConfig:
             "together": "together_ai/",
             "mistral": "mistral/",
             "cohere": "cohere/",
+            "deepseek": "deepseek/",
+            "moonshot": "moonshot/",
+            "dashscope": "dashscope/",
+            "xai": "xai/",
         }
 
         prefix = prefixes.get(provider, "")
@@ -118,25 +184,33 @@ class LLMProvider:
         self.config = config
         self._schema_context_cache: dict[str, str] = {}
 
-        if config.api_key:
-            self._set_api_key(config.model, config.api_key)
+        self._ensure_credentials()
 
         litellm.set_verbose = False
 
-    def _set_api_key(self, model: str, api_key: str) -> None:
-        """Set API key based on model provider."""
-        import os
+    def _ensure_credentials(self) -> None:
+        """Expose the provider's API key to litellm, or fail with a clear message.
 
-        if "anthropic" in model.lower():
-            os.environ["ANTHROPIC_API_KEY"] = api_key
-        elif "gemini" in model.lower() or "google" in model.lower():
-            os.environ["GEMINI_API_KEY"] = api_key
-        elif "azure" in model.lower():
-            os.environ["AZURE_API_KEY"] = api_key
-        elif "groq" in model.lower():
-            os.environ["GROQ_API_KEY"] = api_key
-        elif "ollama" not in model.lower():
-            os.environ["OPENAI_API_KEY"] = api_key
+        Resolves credentials before any request so a missing key surfaces as an
+        actionable config error rather than a cryptic failure mid-generation.
+        Keyless providers (local engines, cloud IAM) are skipped.
+        """
+        provider = self.config.provider
+
+        if provider in _KEYLESS_PROVIDERS:
+            return
+
+        env_var = _PROVIDER_KEY_ENV.get(provider, "OPENAI_API_KEY")
+        key = self.config.api_key or os.getenv(env_var)
+
+        if not key:
+            raise LLMError(
+                f"No API key configured for provider '{provider}'. "
+                f"Set {env_var} in the environment, or add api_key under the "
+                f"'{provider}' block of the LLM config."
+            )
+
+        os.environ[env_var] = key
 
     def _get_completion_kwargs(self) -> dict[str, Any]:
         """Get extra kwargs for completion calls (e.g., api_base for Ollama)."""
