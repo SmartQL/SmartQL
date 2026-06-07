@@ -12,7 +12,7 @@ from dotenv import load_dotenv
 
 from smartql.cache import CacheBackend, create_cache
 from smartql.database import DatabaseConnector, QueryPlan, create_connector
-from smartql.exceptions import SmartQLError, ValidationError
+from smartql.exceptions import SecurityError, SmartQLError, ValidationError
 from smartql.generator import QueryGenerator
 from smartql.llm import LLMProvider, create_llm_provider
 from smartql.result import QueryResult
@@ -188,7 +188,11 @@ class SmartQL:
             consistency_samples=consistency_samples,
         )
 
-        validation_errors = self.security.validate_query(result.sql)
+        filter_error = self._enforce_tenant_filters(result, context)
+        if filter_error:
+            validation_errors = [filter_error]
+        else:
+            validation_errors = self.security.validate_query(result.sql, context=context)
         if validation_errors:
             result.validation_errors = validation_errors
             result.is_valid = False
@@ -293,7 +297,11 @@ class SmartQL:
             question=question,
         )
 
-        validation_errors = self.security.validate_query(result.sql)
+        filter_error = self._enforce_tenant_filters(result, context)
+        if filter_error:
+            validation_errors = [filter_error]
+        else:
+            validation_errors = self.security.validate_query(result.sql, context=context)
         result.validation_errors = validation_errors
         result.is_valid = len(validation_errors) == 0
 
@@ -376,6 +384,20 @@ class SmartQL:
         Validate a SQL query against security rules.
         """
         return self.security.validate_query(sql)
+
+    def _enforce_tenant_filters(
+        self, result: QueryResult, context: dict[str, Any] | None
+    ) -> str | None:
+        """
+        Inject configured tenant filters into the generated SQL in place. Returns
+        an error message if scoping could not be applied (fail closed), otherwise
+        None. A no-op when no required_filters are configured.
+        """
+        try:
+            result.sql = self.security.apply_required_filters(result.sql, context or {})
+            return None
+        except SecurityError as e:
+            return str(e)
 
     def execute(
         self,
