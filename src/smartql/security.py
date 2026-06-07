@@ -48,6 +48,7 @@ class SecurityConfig:
     blocked_columns: set[str] = field(default_factory=set)
     filter_only_columns: set[str] = field(default_factory=set)
     required_filters: dict[str, dict] = field(default_factory=dict)
+    permission_key: str = "role"
     max_rows: int = 1000
     default_limit: int = 100
     timeout_seconds: int = 30
@@ -65,6 +66,7 @@ class SecurityConfig:
             blocked_columns=set(config.get("blocked_columns", [])),
             filter_only_columns=set(config.get("filter_only_columns", [])),
             required_filters=config.get("required_filters", {}),
+            permission_key=config.get("permission_key", "role"),
             max_rows=config.get("max_rows", 1000),
             default_limit=config.get("default_limit", 100),
             timeout_seconds=config.get("timeout_seconds", 30),
@@ -301,10 +303,37 @@ class SecurityValidator:
         self.analyzer = SQLAnalyzer(dialect)
         self.dialect = dialect
 
-    def validate_query(self, sql: str) -> list[str]:
+    def _filter_bypassed(self, filter_config: Any, context: dict[str, Any] | None) -> bool:
+        """
+        True if the caller's runtime role exempts them from a table's required
+        filter, letting trusted roles (e.g. admins, service accounts) run
+        system-wide queries.
+
+        The role is read from the context under ``permission_key`` and must be set
+        by the application from the authenticated session, never from user input.
+        A missing or unrecognised role is never exempt (fail safe).
+        """
+        if not isinstance(filter_config, dict):
+            return False
+        bypass_roles = filter_config.get("bypass_roles")
+        if not bypass_roles:
+            return False
+        if not context:
+            return False
+        role_value = context.get(self.config.permission_key)
+        if role_value is None:
+            return False
+        roles = role_value if isinstance(role_value, (list, tuple, set)) else [role_value]
+        return any(role in bypass_roles for role in roles)
+
+    def validate_query(self, sql: str, context: dict[str, Any] | None = None) -> list[str]:
         """
         Validate a SQL query against all security rules.
         Returns list of error messages (empty if valid).
+
+        ``context`` carries the caller's runtime identity and role; it gates
+        per-table required-filter enforcement so exempt roles can be allowed
+        through.
         """
         errors = []
 
@@ -320,7 +349,7 @@ class SecurityValidator:
         errors.extend(self._check_complexity(sql))
         errors.extend(self._check_dangerous_patterns(sql, ast))
         errors.extend(self._check_limit(sql))
-        errors.extend(self._check_required_filters(sql))
+        errors.extend(self._check_required_filters(sql, context))
 
         return errors
 
@@ -352,13 +381,17 @@ class SecurityValidator:
 
         return errors
 
-    def _check_required_filters(self, sql: str) -> list[str]:
+    def _check_required_filters(self, sql: str, context: dict[str, Any] | None = None) -> list[str]:
         """
         Enforce that every configured required-filter table is constrained by its
         tenant column bound to a parameter. This is the fail-closed backstop
         behind apply_required_filters: a query that reads a scoped table without
         the bound filter is rejected, so tenant isolation never depends on the
         LLM choosing to add the filter.
+
+        Tables whose filter is bypassed for the caller's role (see
+        _filter_bypassed) are not enforced, allowing admins or service roles to
+        run system-wide queries.
         """
         errors: list[str] = []
         if not self.config.required_filters:
@@ -371,6 +404,8 @@ class SecurityValidator:
         referenced = self.analyzer.get_tables(sql)
         for table_name, filter_config in self.config.required_filters.items():
             if table_name.lower() not in referenced:
+                continue
+            if self._filter_bypassed(filter_config, context):
                 continue
             column = (
                 filter_config if isinstance(filter_config, str) else filter_config.get("column")
@@ -514,6 +549,9 @@ class SecurityValidator:
         cannot alter the query structure. The bound value must be supplied at
         execution time under the column's name.
 
+        Tables whose filter is bypassed for the caller's role are left unscoped,
+        so an admin or service role can query system-wide.
+
         Fails closed: if a required table is referenced but its filter cannot be
         applied, or its value is absent from the context, a SecurityError is
         raised rather than returning an under-filtered query.
@@ -529,6 +567,9 @@ class SecurityValidator:
 
         for table_name, filter_config in self.config.required_filters.items():
             if table_name.lower() not in referenced:
+                continue
+
+            if self._filter_bypassed(filter_config, context):
                 continue
 
             column = (

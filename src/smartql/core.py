@@ -192,7 +192,7 @@ class SmartQL:
         if filter_error:
             validation_errors = [filter_error]
         else:
-            validation_errors = self.security.validate_query(result.sql)
+            validation_errors = self.security.validate_query(result.sql, context=context)
         if validation_errors:
             result.validation_errors = validation_errors
             result.is_valid = False
@@ -301,7 +301,7 @@ class SmartQL:
         if filter_error:
             validation_errors = [filter_error]
         else:
-            validation_errors = self.security.validate_query(result.sql)
+            validation_errors = self.security.validate_query(result.sql, context=context)
         result.validation_errors = validation_errors
         result.is_valid = len(validation_errors) == 0
 

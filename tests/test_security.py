@@ -147,3 +147,44 @@ class TestApplyRequiredFilters:
         v = SecurityValidator({"mode": "read_only"}, dialect="mysql")
         sql = "SELECT amount FROM transactions"
         assert v.apply_required_filters(sql, {}) == sql
+
+
+class TestRoleBypass:
+    """A trusted role (e.g. admin) may run system-wide queries; everyone else is scoped."""
+
+    def setup_method(self):
+        cfg = {
+            "mode": "read_only",
+            "permission_key": "role",
+            "required_filters": {
+                "transactions": {"column": "user_id", "bypass_roles": ["admin"]},
+            },
+        }
+        self.v = SecurityValidator(cfg, dialect="mysql")
+        self.sql = "SELECT amount FROM transactions"
+
+    def _rf_error(self, context):
+        return any("Required filter" in e for e in self.v.validate_query(self.sql, context=context))
+
+    def test_non_admin_is_enforced(self):
+        assert self._rf_error({"user_id": 7})
+
+    def test_missing_context_is_enforced(self):
+        assert self._rf_error(None)
+
+    def test_unknown_role_is_enforced(self):
+        assert self._rf_error({"role": "viewer"})
+
+    def test_admin_is_bypassed(self):
+        assert not self._rf_error({"user_id": 1, "role": "admin"})
+
+    def test_role_list_is_bypassed(self):
+        assert not self._rf_error({"role": ["admin", "auditor"]})
+
+    def test_admin_injection_leaves_query_unscoped(self):
+        out = self.v.apply_required_filters(self.sql, {"role": "admin"})
+        assert ":user_id" not in out
+
+    def test_non_admin_injection_scopes_query(self):
+        out = self.v.apply_required_filters(self.sql, {"user_id": 7})
+        assert ":user_id" in out
