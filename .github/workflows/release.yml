@@ -1,0 +1,32 @@
+name: Create Release
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  create-release:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Run Pre-Release Checks
+        uses: whilesmart/workflows/python/pre-release@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check VERSION matches pyproject.toml
+        run: |
+          VERSION=$(tr -d '[:space:]' < VERSION)
+          PYPROJECT_VERSION=$(grep -E '^version = ' pyproject.toml | sed -E 's/version = "(.*)"/\1/')
+          if [ "$VERSION" != "$PYPROJECT_VERSION" ]; then
+            echo "::error::VERSION ($VERSION) does not match pyproject.toml ($PYPROJECT_VERSION)"
+            exit 1
+          fi
+
+      - name: Create Release
+        uses: whilesmart/workflows/python/release@main
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+          package: smartql
+          release_type: package
