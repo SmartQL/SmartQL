@@ -12,6 +12,8 @@ Features:
 - Self-consistency mode for higher accuracy
 """
 
+from importlib.metadata import PackageNotFoundError, version
+
 from smartql.core import SmartQL
 from smartql.database import QueryPlan, create_connector
 from smartql.exceptions import (
@@ -28,7 +30,10 @@ from smartql.result import QueryResult
 from smartql.schema import BusinessRule, Column, Entity, Relationship, Schema
 from smartql.security import SecurityValidator, SQLAnalyzer
 
-__version__ = "1.0.0"
+try:
+    __version__ = version("smartql")
+except PackageNotFoundError:
+    __version__ = "0.0.0"
 __all__ = [
     # Core
     "SmartQL",

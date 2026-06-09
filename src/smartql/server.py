@@ -21,6 +21,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
+from . import __version__
 from .core import SmartQL
 from .exceptions import LLMError, SchemaError, SecurityError, SmartQLError
 
@@ -146,7 +147,7 @@ class HealthResponse(BaseModel):
 app = FastAPI(
     title="SmartQL API",
     description="Natural language to SQL translation engine",
-    version="1.0.0",
+    version=__version__,
     docs_url="/docs",
     redoc_url="/redoc",
 )
@@ -164,6 +165,7 @@ app.add_middleware(
 _start_time = time.time()
 _schemas: dict[str, SmartQL] = {}
 _default_schema_id: Optional[str] = None
+_default_schema_error: Optional[str] = None
 
 
 # =============================================================================
@@ -174,7 +176,7 @@ _default_schema_id: Optional[str] = None
 @app.on_event("startup")
 async def startup_event():
     """Load default schema on startup if configured."""
-    global _default_schema_id
+    global _default_schema_id, _default_schema_error
 
     default_config = os.getenv("SMARTQL_CONFIG")
     if default_config and Path(default_config).exists():
@@ -183,8 +185,10 @@ async def startup_event():
             schema_id = "default"
             _schemas[schema_id] = qw
             _default_schema_id = schema_id
+            _default_schema_error = None
             print(f"✓ Loaded default schema from {default_config}")
         except Exception as e:
+            _default_schema_error = str(e)
             print(f"⚠ Failed to load default schema: {e}")
 
 
@@ -200,6 +204,11 @@ def get_schema_id(x_schema_id: Optional[str] = Header(None)) -> str:
     """Get schema ID from header or use default."""
     schema_id = x_schema_id or _default_schema_id
     if not schema_id:
+        if _default_schema_error:
+            raise HTTPException(
+                status_code=503,
+                detail=f"Default schema failed to load: {_default_schema_error}",
+            )
         raise HTTPException(
             status_code=400,
             detail="No schema loaded. Upload a schema first or set X-Schema-ID header.",
@@ -219,7 +228,7 @@ async def root():
     """Health check and server info."""
     return HealthResponse(
         status="healthy",
-        version="1.0.0",
+        version=__version__,
         schemas_loaded=len(_schemas),
         uptime_seconds=time.time() - _start_time,
     )
