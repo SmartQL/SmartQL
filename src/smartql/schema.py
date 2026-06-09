@@ -28,7 +28,7 @@ def _interpolate_env_vars(value: Any) -> Any:
             expr = match.group(1)
             if ":-" in expr:
                 var_name, default = expr.split(":-", 1)
-                return os.environ.get(var_name, default)
+                return os.environ.get(var_name) or default
             return os.environ.get(expr, "")
 
         return re.sub(pattern, replace, value)

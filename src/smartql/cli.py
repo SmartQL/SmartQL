@@ -15,7 +15,7 @@ from rich.panel import Panel
 from rich.syntax import Syntax
 from rich.table import Table
 
-from smartql import SmartQL
+from smartql import SmartQL, __version__
 from smartql.exceptions import SmartQLError
 from smartql.result import FormatType, detect_format_type
 
@@ -96,7 +96,7 @@ def display_results(rows: list[dict], format_type: FormatType | None = None) -> 
 
 
 @click.group()
-@click.version_option(version="0.1.0", prog_name="smartql")
+@click.version_option(version=__version__, prog_name="smartql")
 def main():
     """SmartQL - Natural Language to SQL, Database First."""
     pass

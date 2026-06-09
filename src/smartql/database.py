@@ -253,8 +253,8 @@ class SQLAlchemyConnector(DatabaseConnector):
             database = connection.get("database", ":memory:")
             return f"sqlite:///{database}"
 
-        host = connection.get("host", "localhost")
-        port = connection.get("port", 5432 if "postgres" in db_type else 3306)
+        host = connection.get("host") or "localhost"
+        port = connection.get("port") or (5432 if "postgres" in db_type else 3306)
         database = connection.get("database", "")
         user = connection.get("user", "")
         password = connection.get("password", "")
