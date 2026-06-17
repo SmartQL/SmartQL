@@ -323,13 +323,17 @@ class LLMProvider:
         schema_context: str,
         examples: list[dict] | None = None,
         custom_system_prompt: str | None = None,
+        feedback: str | None = None,
     ) -> dict[str, Any]:
         """
         Generate SQL from natural language with structured output.
         Uses chain-of-thought reasoning for better accuracy.
+
+        When ``feedback`` is provided (e.g. validation errors from a previous
+        attempt), it is added to the prompt so the model can self-correct.
         """
         system_prompt = custom_system_prompt or self._sql_system_prompt()
-        prompt = self._build_sql_prompt(question, schema_context, examples)
+        prompt = self._build_sql_prompt(question, schema_context, examples, feedback)
 
         try:
             if self._supports_structured_output():
@@ -471,6 +475,7 @@ Respond with a JSON object:
         question: str,
         schema_context: str,
         examples: list[dict] | None = None,
+        feedback: str | None = None,
     ) -> str:
         """Build prompt for SQL generation."""
         parts = [schema_context]
@@ -481,6 +486,9 @@ Respond with a JSON object:
                 parts.append(f"Question: {ex['question']}")
                 parts.append(f"SQL: {ex['sql']}")
                 parts.append("")
+
+        if feedback:
+            parts.append(f"\n## PREVIOUS ATTEMPT FAILED\n{feedback}")
 
         parts.append(f"\n## QUESTION\n{question}")
         parts.append("\n## RESPONSE\nThink step-by-step, then provide the JSON response:")

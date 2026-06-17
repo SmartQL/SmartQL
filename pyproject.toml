@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "smartql"
-version = "0.1.2"
+version = "0.1.3"
 description = "Natural Language to SQL - Database First"
 readme = "README.md"
 license = {text = "MIT"}

@@ -617,6 +617,11 @@ validation:
   
   # Explain query before execution (EXPLAIN ANALYZE)
   explain_queries: false
+
+  # On a validation failure (e.g. an unknown table or excess complexity),
+  # feed the errors and allowed tables back to the model and regenerate, up to
+  # this many times, instead of failing outright. 0 disables. Default: 1
+  repair_attempts: 1
   
   # Reject queries with these patterns
   blocked_patterns:

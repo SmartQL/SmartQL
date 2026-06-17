@@ -77,6 +77,9 @@ class SmartQL:
         self._reject_expensive = (
             schema.validation.get("reject_expensive", True) if has_validation else True
         )
+        self._max_repair_attempts = (
+            schema.validation.get("repair_attempts", 1) if has_validation else 1
+        )
 
     @classmethod
     def from_yaml(
@@ -188,11 +191,24 @@ class SmartQL:
             consistency_samples=consistency_samples,
         )
 
-        filter_error = self._enforce_tenant_filters(result, context)
-        if filter_error:
-            validation_errors = [filter_error]
-        else:
-            validation_errors = self.security.validate_query(result.sql, context=context)
+        validation_errors = self._validation_errors(result, context)
+
+        # Self-correction: a generated query may reference a table that does not
+        # exist or be too complex. The schema is already in the prompt, so feed
+        # the validation errors back to the model and regenerate rather than
+        # failing outright.
+        repair_attempt = 0
+        while (
+            validation_errors and not validate_only and repair_attempt < self._max_repair_attempts
+        ):
+            repair_attempt += 1
+            result = self.generator.generate(
+                question,
+                context=context,
+                feedback=self._repair_feedback(validation_errors),
+            )
+            validation_errors = self._validation_errors(result, context)
+
         if validation_errors:
             result.validation_errors = validation_errors
             result.is_valid = False
@@ -384,6 +400,30 @@ class SmartQL:
         Validate a SQL query against security rules.
         """
         return self.security.validate_query(sql)
+
+    def _validation_errors(self, result: QueryResult, context: dict[str, Any] | None) -> list[str]:
+        """Collect tenant-filter and security validation errors for a result."""
+        filter_error = self._enforce_tenant_filters(result, context)
+        if filter_error:
+            return [filter_error]
+        return self.security.validate_query(result.sql, context=context)
+
+    def _repair_feedback(self, errors: list[str]) -> str:
+        """Tell the model why its previous query was rejected so it can fix it."""
+        lines = ["Your previous SQL query was rejected for these reasons:"]
+        lines.extend(f"- {error}" for error in errors)
+        allowed = (
+            sorted(self.security.config.allowed_tables)
+            if self.security and self.security.config.allowed_tables
+            else []
+        )
+        if allowed:
+            lines.append("Only use these tables: " + ", ".join(allowed) + ".")
+        lines.append(
+            "Do not invent tables or columns; use only what the schema defines, "
+            "and keep the query as simple as possible."
+        )
+        return "\n".join(lines)
 
     def _enforce_tenant_filters(
         self, result: QueryResult, context: dict[str, Any] | None
