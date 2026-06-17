@@ -111,6 +111,7 @@ class QueryGenerator:
         use_consistency: bool = False,
         consistency_samples: int = 3,
         validate: bool = True,
+        feedback: str | None = None,
     ) -> QueryResult:
         """
         Generate a SQL query from a natural language question.
@@ -148,6 +149,7 @@ class QueryGenerator:
                     schema_context=schema_context,
                     examples=examples,
                     custom_system_prompt=custom_system_prompt,
+                    feedback=feedback,
                 )
         except Exception as e:
             raise LLMError(f"Failed to generate SQL: {e}")
