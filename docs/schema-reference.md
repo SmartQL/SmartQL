@@ -471,7 +471,7 @@ security:
   filter_only_columns:
     - users.tenant_id
     
-  # Required filters (for multi-tenant apps)
+  # Required filters (for multi-tenant apps) - see Required Filters below
   required_filters:
     orders:
       column: tenant_id
@@ -499,6 +499,68 @@ security:
     requests_per_minute: 60
     requests_per_hour: 500
 ```
+
+### Required Filters
+
+A required filter says how a table's rows are restricted to the caller. Every
+query touching the table is rewritten to include the filter, and rejected if the
+filter still is not there afterwards, so isolation never depends on the model
+choosing to add it.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `column` | string | Column bound to a context value |
+| `param` | string | Context key to bind (defaults to `column`) |
+| `constants` | map | Columns pinned to fixed values from this config |
+| `through` | map | Borrow another table's scoping (`column` + `references`) |
+| `bypass_roles` | array | Roles exempt from this filter |
+| `description` | string | Documentation only |
+
+The shorthand `orders: tenant_id` is equivalent to `orders: {column: tenant_id}`.
+
+**`param`** decouples the column name from the context key, so a table whose
+owner column is named differently still binds the same caller identity:
+
+```yaml
+budgets:
+  column: owner_id
+  param: user_id      # binds :user_id, not :owner_id
+```
+
+**`constants`** pin extra columns to values fixed in configuration. This is what
+polymorphic ownership needs: without the type pin, a budget owned by a *group*
+whose id happens to match the caller's user id would be readable. Constants come
+from config only, never from request data:
+
+```yaml
+budgets:
+  column: owner_id
+  param: user_id
+  constants:
+    owner_type: 'App\Models\User'
+```
+
+**`through`** scopes a table that has no owner column of its own, by requiring
+its rows to belong to a parent the caller can read:
+
+```yaml
+refunds:
+  through:
+    column: refund_transaction_id
+    references: transactions.id
+```
+
+Queries against `refunds` become
+`... WHERE refunds.refund_transaction_id IN (SELECT transactions.id FROM transactions WHERE transactions.user_id = :user_id)`.
+
+The parent's rule is resolved recursively, so a chain reaching a tenant column
+several tables away works: `budget_period_states` through `budgets` lands on the
+budget owner. A `through` pointing at a table with no required filter of its own
+is a configuration error and fails closed rather than silently scoping nothing,
+as are circular chains.
+
+All forms compose: a table may bind a column, pin constants, and scope through
+a parent at the same time.
 
 ---
 
