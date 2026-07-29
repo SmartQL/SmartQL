@@ -339,6 +339,82 @@ class TestThroughScoping:
         assert self._errors(out) == []
 
 
+class TestComplexitySource:
+    """Size limits judge the caller's query, not the scoping injected into it."""
+
+    def setup_method(self):
+        cfg = {
+            "mode": "read_only",
+            "max_complexity": 25,
+            "required_filters": {
+                "transactions": {"column": "user_id"},
+                "refunds": {
+                    "through": {
+                        "column": "refund_transaction_id",
+                        "references": "transactions.id",
+                    }
+                },
+            },
+        }
+        self.v = SecurityValidator(cfg, dialect="mysql")
+        self.ctx = {"user_id": 7}
+
+    def test_injected_subquery_is_not_charged_to_the_caller(self):
+        sql = "SELECT amount FROM refunds"
+        scoped = self.v.apply_required_filters(sql, self.ctx)
+
+        # The scoped query is over budget on its own...
+        assert self.v.analyzer.estimate_complexity(scoped) > 25
+        assert any("too complex" in e for e in self.v.validate_query(scoped, context=self.ctx))
+
+        # ...but not when judged against what the caller actually asked for.
+        errors = self.v.validate_query(scoped, context=self.ctx, complexity_source=sql)
+        assert [e for e in errors if "too complex" in e] == []
+
+    def test_join_limits_still_apply_to_the_real_query(self):
+        # Only complexity is exempted. Joins are counted on what executes.
+        v = SecurityValidator(
+            {
+                "mode": "read_only",
+                "max_join_depth": 1,
+                "required_filters": {"transactions": {"column": "user_id"}},
+            },
+            dialect="mysql",
+        )
+        sql = (
+            "SELECT t.amount FROM transactions t "
+            "JOIN wallets w ON t.wallet_id = w.id "
+            "JOIN parties p ON t.party_id = p.id"
+        )
+
+        assert any("Too many JOINs" in e for e in v.validate_query(sql, complexity_source=sql))
+
+    def test_a_genuinely_complex_query_is_still_rejected(self):
+        sql = (
+            "SELECT c.name, SUM(t.amount) FROM transactions t "
+            "JOIN categorizables cz ON t.id = cz.categorizable_id "
+            "JOIN categories c ON cz.category_id = c.id "
+            "GROUP BY c.id ORDER BY SUM(t.amount) HAVING SUM(t.amount) > 0"
+        )
+        errors = self.v.validate_query(sql, context=self.ctx, complexity_source=sql)
+
+        assert any("too complex" in e for e in errors)
+
+    def test_tenant_scoping_is_still_checked_on_the_real_query(self):
+        # The caller's own query has no filter; passing it as the complexity
+        # source must not smuggle it past the required-filter check.
+        sql = "SELECT amount FROM transactions"
+        errors = self.v.validate_query(sql, context=self.ctx, complexity_source=sql)
+
+        assert any("Required filter" in e for e in errors)
+
+    def test_defaults_to_the_query_under_validation(self):
+        sql = "SELECT amount FROM refunds"
+        scoped = self.v.apply_required_filters(sql, self.ctx)
+
+        assert any("too complex" in e for e in self.v.validate_query(scoped, context=self.ctx))
+
+
 class TestThroughMisconfiguration:
     """A through-chain that cannot reach a tenant filter must fail closed."""
 

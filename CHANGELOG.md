@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Columns marked `hidden` are now stripped from result rows and the model is told never to select them, while remaining usable in `WHERE` clauses. Previously the flag was parsed but had no effect.
 - Required filters can bind to a context key other than the column's own name (`param`), pin columns to values fixed in configuration (`constants`), and scope a table through a parent that owns it (`through`). Together these cover polymorphically owned tables and tables with no owner column of their own, neither of which could previously be exposed safely. Chains resolve recursively and fail closed on a missing parent filter or a cycle.
 
+### Fixed
+
+- The complexity limit now judges the query as the model wrote it, rather than the query after tenant filters were injected into it. Scoping a table through a parent adds a subquery worth a fifth of the default budget, so every table that gained a filter used to make previously answerable questions "too complex". Table, join and row limits still apply to the query that actually executes.
+
 Existing configurations are unaffected: every new key is optional and the previous filter shape behaves exactly as before.
 
 ## [0.1.3] - 2026-06-17

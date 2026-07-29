@@ -481,7 +481,12 @@ class SecurityValidator:
         roles = role_value if isinstance(role_value, (list, tuple, set)) else [role_value]
         return any(role in bypass_roles for role in roles)
 
-    def validate_query(self, sql: str, context: dict[str, Any] | None = None) -> list[str]:
+    def validate_query(
+        self,
+        sql: str,
+        context: dict[str, Any] | None = None,
+        complexity_source: str | None = None,
+    ) -> list[str]:
         """
         Validate a SQL query against all security rules.
         Returns list of error messages (empty if valid).
@@ -490,6 +495,14 @@ class SecurityValidator:
         per-table required-filter enforcement so exempt roles can be allowed
         through.
 
+        ``complexity_source`` is the query to judge complexity against, when
+        that differs from the query being validated. Tenant scoping adds
+        subqueries the caller never asked for; charging those against the
+        complexity budget would mean the limit tightens every time a table gains
+        a filter, rejecting questions that were answerable the day before.
+        Defaults to ``sql``, so a directly validated query is unaffected. Table
+        and join limits still apply to the real query, which is what actually
+        executes.
         """
         errors = []
 
@@ -502,7 +515,7 @@ class SecurityValidator:
         errors.extend(self._check_tables(sql))
         errors.extend(self._check_columns(sql))
         errors.extend(self._check_joins(sql))
-        errors.extend(self._check_complexity(sql))
+        errors.extend(self._check_complexity(complexity_source or sql))
         errors.extend(self._check_dangerous_patterns(sql, ast))
         errors.extend(self._check_limit(sql))
         errors.extend(self._check_required_filters(sql, context))
