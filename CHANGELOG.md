@@ -5,6 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- Entities can name a `label_column`. Results carrying a foreign key to such an entity gain a sibling key with the human-readable label, so answers read as names rather than raw ids. Labels are fetched in one batched, tenant-scoped query per foreign key and can never surface a row the caller could not have read directly.
+- Columns marked `hidden` are now stripped from result rows and the model is told never to select them, while remaining usable in `WHERE` clauses. Previously the flag was parsed but had no effect.
+
 ## [0.1.3] - 2026-06-17
 
 ### Added

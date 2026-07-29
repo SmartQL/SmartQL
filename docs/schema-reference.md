@@ -83,6 +83,9 @@ semantic_layer:
         - members
         - accounts
         - buyers
+
+      # Column that reads as this row's name (see Result Hydration)
+      label_column: full_name
       
       # Column definitions
       columns:
@@ -170,6 +173,68 @@ semantic_layer:
 | `hidden` | boolean | Exclude from query results? |
 | `values` | array | Valid values (for enum type) |
 | `references` | string | Foreign key reference (e.g., "users.id") |
+
+### Entity Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `table` | string | Actual table name (defaults to the entity key) |
+| `description` | string | Human-readable description |
+| `aliases` | array | Alternative names for this entity |
+| `columns` | map | Column definitions |
+| `label_column` | string | Column that reads as this row's name |
+
+---
+
+## Result Hydration
+
+Answers built from raw ids read badly: "wallet 14" tells a user nothing. Two
+pieces of metadata fix that, and both are optional: a schema that declares
+neither behaves exactly as before.
+
+**`label_column`** names the column that stands in for a row. When another
+entity's column `references` an entity with a label column, every result row
+carrying that foreign key gains a sibling key with the label:
+
+```yaml
+semantic_layer:
+  entities:
+    wallets:
+      table: wallets
+      label_column: name
+      columns:
+        id: {type: integer, primary: true}
+        name: {type: string}
+
+    transactions:
+      table: transactions
+      columns:
+        amount: {type: decimal}
+        wallet_id:
+          type: integer
+          references: wallets.id
+```
+
+A row of `{amount: 25, wallet_id: 14}` comes back as
+`{amount: 25, wallet_id: 14, wallet_label: "Main Account"}`. The labels are
+fetched with one batched query per foreign key, after the main query runs, and
+that lookup goes through the same required-filter injection as any other query,
+so it can never read a row the caller could not have read directly. The naming
+rule drops a trailing `_id` and appends `_label`.
+
+The label column is also described to the model, which is told to join and
+select labels rather than expose raw ids.
+
+**`hidden: true`** marks a column as internal. Hidden columns are stripped from
+result rows and the model is told never to select them, while remaining usable
+in `WHERE` clauses, which is what tenant columns need:
+
+```yaml
+columns:
+  user_id:
+    type: integer
+    hidden: true
+```
 
 ---
 
