@@ -188,3 +188,277 @@ class TestRoleBypass:
     def test_non_admin_injection_scopes_query(self):
         out = self.v.apply_required_filters(self.sql, {"user_id": 7})
         assert ":user_id" in out
+
+
+class TestParamRenaming:
+    """A tenant column may bind to a context key that is not its own name."""
+
+    def setup_method(self):
+        cfg = {
+            "mode": "read_only",
+            "required_filters": {
+                "budgets": {"column": "owner_id", "param": "user_id"},
+            },
+        }
+        self.v = SecurityValidator(cfg, dialect="mysql")
+
+    def test_binds_the_named_param(self):
+        out = self.v.apply_required_filters("SELECT amount FROM budgets", {"user_id": 7})
+        assert "budgets.owner_id = :user_id" in out
+
+    def test_context_checked_under_param_not_column(self):
+        with pytest.raises(SecurityError):
+            self.v.apply_required_filters("SELECT amount FROM budgets", {"owner_id": 7})
+
+    def test_column_defaults_to_its_own_name(self):
+        v = SecurityValidator(
+            {"mode": "read_only", "required_filters": {"wallets": {"column": "user_id"}}},
+            dialect="mysql",
+        )
+        out = v.apply_required_filters("SELECT id FROM wallets", {"user_id": 7})
+        assert "wallets.user_id = :user_id" in out
+
+
+class TestConstantFilters:
+    """Morph-owned tables pin a type column to a value fixed in configuration."""
+
+    def setup_method(self):
+        cfg = {
+            "mode": "read_only",
+            "required_filters": {
+                "budgets": {
+                    "column": "owner_id",
+                    "param": "user_id",
+                    "constants": {"owner_type": "App\\Models\\User"},
+                },
+            },
+        }
+        self.v = SecurityValidator(cfg, dialect="mysql")
+        self.ctx = {"user_id": 7}
+
+    def _errors(self, sql):
+        return [e for e in self.v.validate_query(sql, context=self.ctx) if "Required filter" in e]
+
+    def test_injects_the_constant(self):
+        out = self.v.apply_required_filters("SELECT amount FROM budgets", self.ctx)
+        assert self._errors(out) == []
+
+    def test_owner_id_alone_is_rejected(self):
+        # Without the type pin, another owner type's row with the same id leaks.
+        sql = "SELECT amount FROM budgets WHERE budgets.owner_id = :user_id"
+        assert any("owner_type" in e for e in self._errors(sql))
+
+    def test_wrong_constant_value_rejected(self):
+        sql = (
+            "SELECT amount FROM budgets WHERE budgets.owner_id = :user_id "
+            "AND budgets.owner_type = 'App\\\\Models\\\\Group'"
+        )
+        assert any("owner_type" in e for e in self._errors(sql))
+
+    def test_constant_survives_a_postgres_round_trip(self):
+        v = SecurityValidator(
+            {
+                "mode": "read_only",
+                "required_filters": {
+                    "budgets": {
+                        "column": "owner_id",
+                        "param": "user_id",
+                        "constants": {"owner_type": "App\\Models\\User"},
+                    }
+                },
+            },
+            dialect="postgres",
+        )
+        out = v.apply_required_filters("SELECT amount FROM budgets", self.ctx)
+        assert "App\\Models\\User" in out
+        assert [e for e in v.validate_query(out, context=self.ctx) if "Required filter" in e] == []
+
+
+class TestThroughScoping:
+    """Tables with no tenant column of their own borrow their parent's scoping."""
+
+    def setup_method(self):
+        cfg = {
+            "mode": "read_only",
+            "required_filters": {
+                "transactions": {"column": "user_id"},
+                "budgets": {"column": "owner_id", "param": "user_id"},
+                "refunds": {
+                    "through": {
+                        "column": "refund_transaction_id",
+                        "references": "transactions.id",
+                    }
+                },
+                "budget_period_states": {
+                    "through": {"column": "budget_id", "references": "budgets.id"}
+                },
+            },
+        }
+        self.v = SecurityValidator(cfg, dialect="mysql")
+        self.ctx = {"user_id": 7}
+
+    def _errors(self, sql):
+        return [e for e in self.v.validate_query(sql, context=self.ctx) if "Required filter" in e]
+
+    def test_unscoped_refund_query_rejected(self):
+        assert self._errors("SELECT amount FROM refunds") != []
+
+    def test_injection_scopes_through_the_parent(self):
+        out = self.v.apply_required_filters("SELECT amount FROM refunds r", self.ctx)
+        assert "r.refund_transaction_id IN (SELECT transactions.id FROM transactions" in out
+        assert self._errors(out) == []
+
+    def test_subquery_on_an_unscoped_table_rejected(self):
+        # An IN against some other table is not the parent's scoping.
+        sql = (
+            "SELECT amount FROM refunds r WHERE r.refund_transaction_id IN "
+            "(SELECT id FROM categories)"
+        )
+        assert self._errors(sql) != []
+
+    def test_parent_filter_is_still_enforced_inside_the_subquery(self):
+        # Pulling transactions in makes it a referenced table; its own rule applies.
+        sql = (
+            "SELECT amount FROM refunds r WHERE r.refund_transaction_id IN "
+            "(SELECT id FROM transactions)"
+        )
+        assert any("transactions.user_id" in e for e in self._errors(sql))
+
+    def test_chained_through_resolves_to_the_tenant(self):
+        out = self.v.apply_required_filters("SELECT * FROM budget_period_states s", self.ctx)
+        assert "budgets.owner_id = :user_id" in out
+        assert self._errors(out) == []
+
+    def test_missing_context_fails_closed(self):
+        with pytest.raises(SecurityError):
+            self.v.apply_required_filters("SELECT amount FROM refunds", {})
+
+    def test_join_scopes_both_sides(self):
+        sql = "SELECT t.amount FROM transactions t JOIN refunds r ON r.refund_transaction_id = t.id"
+        out = self.v.apply_required_filters(sql, self.ctx)
+        assert self._errors(out) == []
+
+
+class TestComplexitySource:
+    """Size limits judge the caller's query, not the scoping injected into it."""
+
+    def setup_method(self):
+        cfg = {
+            "mode": "read_only",
+            "max_complexity": 25,
+            "required_filters": {
+                "transactions": {"column": "user_id"},
+                "refunds": {
+                    "through": {
+                        "column": "refund_transaction_id",
+                        "references": "transactions.id",
+                    }
+                },
+            },
+        }
+        self.v = SecurityValidator(cfg, dialect="mysql")
+        self.ctx = {"user_id": 7}
+
+    def test_injected_subquery_is_not_charged_to_the_caller(self):
+        sql = "SELECT amount FROM refunds"
+        scoped = self.v.apply_required_filters(sql, self.ctx)
+
+        # The scoped query is over budget on its own...
+        assert self.v.analyzer.estimate_complexity(scoped) > 25
+        assert any("too complex" in e for e in self.v.validate_query(scoped, context=self.ctx))
+
+        # ...but not when judged against what the caller actually asked for.
+        errors = self.v.validate_query(scoped, context=self.ctx, complexity_source=sql)
+        assert [e for e in errors if "too complex" in e] == []
+
+    def test_join_limits_still_apply_to_the_real_query(self):
+        # Only complexity is exempted. Joins are counted on what executes.
+        v = SecurityValidator(
+            {
+                "mode": "read_only",
+                "max_join_depth": 1,
+                "required_filters": {"transactions": {"column": "user_id"}},
+            },
+            dialect="mysql",
+        )
+        sql = (
+            "SELECT t.amount FROM transactions t "
+            "JOIN wallets w ON t.wallet_id = w.id "
+            "JOIN parties p ON t.party_id = p.id"
+        )
+
+        assert any("Too many JOINs" in e for e in v.validate_query(sql, complexity_source=sql))
+
+    def test_a_genuinely_complex_query_is_still_rejected(self):
+        sql = (
+            "SELECT c.name, SUM(t.amount) FROM transactions t "
+            "JOIN categorizables cz ON t.id = cz.categorizable_id "
+            "JOIN categories c ON cz.category_id = c.id "
+            "GROUP BY c.id ORDER BY SUM(t.amount) HAVING SUM(t.amount) > 0"
+        )
+        errors = self.v.validate_query(sql, context=self.ctx, complexity_source=sql)
+
+        assert any("too complex" in e for e in errors)
+
+    def test_tenant_scoping_is_still_checked_on_the_real_query(self):
+        # The caller's own query has no filter; passing it as the complexity
+        # source must not smuggle it past the required-filter check.
+        sql = "SELECT amount FROM transactions"
+        errors = self.v.validate_query(sql, context=self.ctx, complexity_source=sql)
+
+        assert any("Required filter" in e for e in errors)
+
+    def test_defaults_to_the_query_under_validation(self):
+        sql = "SELECT amount FROM refunds"
+        scoped = self.v.apply_required_filters(sql, self.ctx)
+
+        assert any("too complex" in e for e in self.v.validate_query(scoped, context=self.ctx))
+
+
+class TestThroughMisconfiguration:
+    """A through-chain that cannot reach a tenant filter must fail closed."""
+
+    def test_parent_without_a_filter_is_rejected(self):
+        v = SecurityValidator(
+            {
+                "mode": "read_only",
+                "required_filters": {
+                    "refunds": {
+                        "through": {
+                            "column": "refund_transaction_id",
+                            "references": "transactions.id",
+                        }
+                    }
+                },
+            },
+            dialect="mysql",
+        )
+        with pytest.raises(SecurityError):
+            v.apply_required_filters("SELECT amount FROM refunds", {"user_id": 7})
+
+    def test_self_reference_is_rejected(self):
+        v = SecurityValidator(
+            {
+                "mode": "read_only",
+                "required_filters": {
+                    "refunds": {"through": {"column": "parent_id", "references": "refunds.id"}}
+                },
+            },
+            dialect="mysql",
+        )
+        with pytest.raises(SecurityError):
+            v.apply_required_filters("SELECT amount FROM refunds", {"user_id": 7})
+
+    def test_cycle_between_two_tables_is_rejected(self):
+        v = SecurityValidator(
+            {
+                "mode": "read_only",
+                "required_filters": {
+                    "a": {"through": {"column": "b_id", "references": "b.id"}},
+                    "b": {"through": {"column": "a_id", "references": "a.id"}},
+                },
+            },
+            dialect="mysql",
+        )
+        with pytest.raises(SecurityError):
+            v.apply_required_filters("SELECT id FROM a", {"user_id": 7})

@@ -83,6 +83,9 @@ semantic_layer:
         - members
         - accounts
         - buyers
+
+      # Column that reads as this row's name (see Result Hydration)
+      label_column: full_name
       
       # Column definitions
       columns:
@@ -170,6 +173,68 @@ semantic_layer:
 | `hidden` | boolean | Exclude from query results? |
 | `values` | array | Valid values (for enum type) |
 | `references` | string | Foreign key reference (e.g., "users.id") |
+
+### Entity Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `table` | string | Actual table name (defaults to the entity key) |
+| `description` | string | Human-readable description |
+| `aliases` | array | Alternative names for this entity |
+| `columns` | map | Column definitions |
+| `label_column` | string | Column that reads as this row's name |
+
+---
+
+## Result Hydration
+
+Answers built from raw ids read badly: "wallet 14" tells a user nothing. Two
+pieces of metadata fix that, and both are optional: a schema that declares
+neither behaves exactly as before.
+
+**`label_column`** names the column that stands in for a row. When another
+entity's column `references` an entity with a label column, every result row
+carrying that foreign key gains a sibling key with the label:
+
+```yaml
+semantic_layer:
+  entities:
+    wallets:
+      table: wallets
+      label_column: name
+      columns:
+        id: {type: integer, primary: true}
+        name: {type: string}
+
+    transactions:
+      table: transactions
+      columns:
+        amount: {type: decimal}
+        wallet_id:
+          type: integer
+          references: wallets.id
+```
+
+A row of `{amount: 25, wallet_id: 14}` comes back as
+`{amount: 25, wallet_id: 14, wallet_label: "Main Account"}`. The labels are
+fetched with one batched query per foreign key, after the main query runs, and
+that lookup goes through the same required-filter injection as any other query,
+so it can never read a row the caller could not have read directly. The naming
+rule drops a trailing `_id` and appends `_label`.
+
+The label column is also described to the model, which is told to join and
+select labels rather than expose raw ids.
+
+**`hidden: true`** marks a column as internal. Hidden columns are stripped from
+result rows and the model is told never to select them, while remaining usable
+in `WHERE` clauses, which is what tenant columns need:
+
+```yaml
+columns:
+  user_id:
+    type: integer
+    hidden: true
+```
 
 ---
 
@@ -406,7 +471,7 @@ security:
   filter_only_columns:
     - users.tenant_id
     
-  # Required filters (for multi-tenant apps)
+  # Required filters (for multi-tenant apps) - see Required Filters below
   required_filters:
     orders:
       column: tenant_id
@@ -434,6 +499,68 @@ security:
     requests_per_minute: 60
     requests_per_hour: 500
 ```
+
+### Required Filters
+
+A required filter says how a table's rows are restricted to the caller. Every
+query touching the table is rewritten to include the filter, and rejected if the
+filter still is not there afterwards, so isolation never depends on the model
+choosing to add it.
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `column` | string | Column bound to a context value |
+| `param` | string | Context key to bind (defaults to `column`) |
+| `constants` | map | Columns pinned to fixed values from this config |
+| `through` | map | Borrow another table's scoping (`column` + `references`) |
+| `bypass_roles` | array | Roles exempt from this filter |
+| `description` | string | Documentation only |
+
+The shorthand `orders: tenant_id` is equivalent to `orders: {column: tenant_id}`.
+
+**`param`** decouples the column name from the context key, so a table whose
+owner column is named differently still binds the same caller identity:
+
+```yaml
+budgets:
+  column: owner_id
+  param: user_id      # binds :user_id, not :owner_id
+```
+
+**`constants`** pin extra columns to values fixed in configuration. This is what
+polymorphic ownership needs: without the type pin, a budget owned by a *group*
+whose id happens to match the caller's user id would be readable. Constants come
+from config only, never from request data:
+
+```yaml
+budgets:
+  column: owner_id
+  param: user_id
+  constants:
+    owner_type: 'App\Models\User'
+```
+
+**`through`** scopes a table that has no owner column of its own, by requiring
+its rows to belong to a parent the caller can read:
+
+```yaml
+refunds:
+  through:
+    column: refund_transaction_id
+    references: transactions.id
+```
+
+Queries against `refunds` become
+`... WHERE refunds.refund_transaction_id IN (SELECT transactions.id FROM transactions WHERE transactions.user_id = :user_id)`.
+
+The parent's rule is resolved recursively, so a chain reaching a tenant column
+several tables away works: `budget_period_states` through `budgets` lands on the
+budget owner. A `through` pointing at a table with no required filter of its own
+is a configuration error and fails closed rather than silently scoping nothing,
+as are circular chains.
+
+All forms compose: a table may bind a column, pin constants, and scope through
+a parent at the same time.
 
 ---
 

@@ -448,6 +448,9 @@ Use chain-of-thought reasoning:
 - Handle NULL values appropriately with COALESCE or IS NULL checks
 - Use proper aggregate functions with GROUP BY when needed
 - Qualify all column names with table aliases to avoid ambiguity
+- When a column references another table that has a label column, join to it and
+  select the label instead of the raw id, so results read as names not numbers
+- Never select a column marked INTERNAL; use it in WHERE clauses only
 
 ## RESULT FORMAT TYPES
 Suggest the best display format for the result based on the question:

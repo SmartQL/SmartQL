@@ -14,6 +14,7 @@ from smartql.cache import CacheBackend, create_cache
 from smartql.database import DatabaseConnector, QueryPlan, create_connector
 from smartql.exceptions import SecurityError, SmartQLError, ValidationError
 from smartql.generator import QueryGenerator
+from smartql.hydration import ResultHydrator
 from smartql.llm import LLMProvider, create_llm_provider
 from smartql.result import QueryResult
 from smartql.schema import Schema
@@ -68,6 +69,12 @@ class SmartQL:
             llm=llm,
             security=self.security,
             database=database,
+        )
+
+        self.hydrator = ResultHydrator(
+            schema=schema,
+            database=database,
+            security=self.security,
         )
 
         has_validation = hasattr(schema, "validation") and schema.validation
@@ -238,6 +245,7 @@ class SmartQL:
 
             try:
                 rows = self.database.execute(result.sql, params=context)
+                rows = self._hydrate(rows, result.sql, context)
                 result.rows = rows
                 result.row_count = len(rows)
             except Exception as e:
@@ -313,17 +321,14 @@ class SmartQL:
             question=question,
         )
 
-        filter_error = self._enforce_tenant_filters(result, context)
-        if filter_error:
-            validation_errors = [filter_error]
-        else:
-            validation_errors = self.security.validate_query(result.sql, context=context)
+        validation_errors = self._validation_errors(result, context)
         result.validation_errors = validation_errors
         result.is_valid = len(validation_errors) == 0
 
         if execute and self.database and result.is_valid:
             try:
                 rows = self.database.execute(result.sql, params=context)
+                rows = self._hydrate(rows, result.sql, context)
                 result.rows = rows
                 result.row_count = len(rows)
             except Exception as e:
@@ -403,10 +408,26 @@ class SmartQL:
 
     def _validation_errors(self, result: QueryResult, context: dict[str, Any] | None) -> list[str]:
         """Collect tenant-filter and security validation errors for a result."""
+        # Captured before scoping is injected: the size limits judge the query
+        # the model wrote, not the filters we added to it.
+        generated_sql = result.sql
+
         filter_error = self._enforce_tenant_filters(result, context)
         if filter_error:
             return [filter_error]
-        return self.security.validate_query(result.sql, context=context)
+        return self.security.validate_query(
+            result.sql, context=context, complexity_source=generated_sql
+        )
+
+    def _hydrate(
+        self,
+        rows: list[dict[str, Any]],
+        sql: str,
+        context: dict[str, Any] | None,
+    ) -> list[dict[str, Any]]:
+        """Attach foreign-key labels and drop hidden columns from result rows."""
+        tables = self.security.get_tables_from_query(sql)
+        return self.hydrator.hydrate(rows, tables, context)
 
     def _repair_feedback(self, errors: list[str]) -> str:
         """Tell the model why its previous query was rejected so it can fix it."""

@@ -38,6 +38,82 @@ _DDL_NODES = tuple(
 )
 
 
+@dataclass(frozen=True)
+class ThroughFilter:
+    """
+    Scoping borrowed from another table.
+
+    Used for tables that carry no tenant column of their own and are only ever
+    reachable through a parent (a refund through its transaction, a budget period
+    through its budget). The parent's own required filter is what does the
+    scoping; this just says which column links the two.
+    """
+
+    column: str  # Local column linking to the parent
+    references: str  # "<table>.<column>" on the parent
+
+    @property
+    def ref_table(self) -> str:
+        return self.references.split(".", 1)[0]
+
+    @property
+    def ref_column(self) -> str:
+        parts = self.references.split(".", 1)
+        return parts[1] if len(parts) == 2 and parts[1] else "id"
+
+
+@dataclass(frozen=True)
+class RequiredFilter:
+    """
+    One table's tenant-scoping rule, normalised from its config entry.
+
+    The three forms compose: a table may bind a column to a context parameter,
+    pin columns to constants from config, and borrow scoping from a parent, in
+    any combination.
+    """
+
+    table: str
+    column: str | None = None
+    param: str | None = None
+    constants: dict[str, Any] = field(default_factory=dict)
+    through: ThroughFilter | None = None
+
+    @property
+    def param_name(self) -> str | None:
+        """Context key the column binds to; defaults to the column's own name."""
+        return self.param or self.column
+
+    @property
+    def is_empty(self) -> bool:
+        return not (self.column or self.constants or self.through)
+
+    @classmethod
+    def from_config(cls, table: str, config: Any) -> RequiredFilter:
+        """Parse a required_filters entry. The shorthand string form is a column."""
+        if isinstance(config, str):
+            return cls(table=table, column=config)
+        if not isinstance(config, dict):
+            return cls(table=table)
+
+        through = None
+        through_config = config.get("through")
+        if isinstance(through_config, dict) and through_config.get("column"):
+            through = ThroughFilter(
+                column=through_config["column"],
+                references=through_config.get("references", ""),
+            )
+
+        constants = config.get("constants") or {}
+
+        return cls(
+            table=table,
+            column=config.get("column"),
+            param=config.get("param"),
+            constants=dict(constants) if isinstance(constants, dict) else {},
+            through=through,
+        )
+
+
 @dataclass
 class SecurityConfig:
     """Security configuration for query validation."""
@@ -183,10 +259,86 @@ class SQLAnalyzer:
         column or to a literal. An unqualified column only resolves when a single
         base table is in scope.
         """
+        return self._has_equality(
+            ast,
+            table,
+            column,
+            lambda other: isinstance(other, (exp.Placeholder, exp.Parameter)),
+        )
+
+    def has_constant_filter(self, ast: exp.Expression, table: str, column: str, value: Any) -> bool:
+        """
+        True if the query pins ``<table>.<column>`` to the given literal value.
+
+        Constants come from trusted configuration (a morph type, a status), never
+        from request data, so a literal is the correct and only accepted form.
+        """
+        expected = str(value)
+        return self._has_equality(
+            ast,
+            table,
+            column,
+            lambda other: isinstance(other, exp.Literal) and str(other.this) == expected,
+        )
+
+    def has_scoped_subquery(
+        self,
+        ast: exp.Expression,
+        table: str,
+        column: str,
+        ref_table: str,
+    ) -> bool:
+        """
+        True if ``<table>.<column>`` is restricted to a subquery reading the
+        parent table. The parent's own required filter is enforced separately:
+        pulling it into the query makes it a referenced table, so the ordinary
+        per-table check covers it.
+        """
         table = table.lower()
         column = column.lower()
+        ref_table = ref_table.lower()
+
+        for in_expr in ast.find_all(exp.In):
+            col_side = in_expr.this
+            if not isinstance(col_side, exp.Column):
+                continue
+            if col_side.name.lower() != column:
+                continue
+            if self._resolve_column_table(ast, col_side) != table:
+                continue
+            query = in_expr.args.get("query")
+            if query is None:
+                continue
+            for tbl in query.find_all(exp.Table):
+                if (tbl.name or "").lower() == ref_table:
+                    return True
+        return False
+
+    def _resolve_column_table(self, ast: exp.Expression, col: exp.Column) -> str | None:
+        """
+        Real table a column reference belongs to. An unqualified column only
+        resolves when a single base table is in scope; anything ambiguous is
+        deliberately left unresolved so checks fail closed.
+        """
         amap = self.alias_map(ast)
+        qualifier = (col.table or "").lower()
+        if qualifier:
+            return amap.get(qualifier)
         base_tables = set(amap.values())
+        if len(base_tables) == 1:
+            return next(iter(base_tables))
+        return None
+
+    def _has_equality(
+        self,
+        ast: exp.Expression,
+        table: str,
+        column: str,
+        accepts: Any,
+    ) -> bool:
+        """Find an equality on ``<table>.<column>`` whose other side ``accepts``."""
+        table = table.lower()
+        column = column.lower()
 
         for eq in ast.find_all(exp.EQ):
             for col_side, other in ((eq.left, eq.right), (eq.right, eq.left)):
@@ -194,14 +346,9 @@ class SQLAnalyzer:
                     continue
                 if col_side.name.lower() != column:
                     continue
-                qualifier = (col_side.table or "").lower()
-                if qualifier:
-                    resolved = amap.get(qualifier)
-                elif len(base_tables) == 1:
-                    resolved = next(iter(base_tables))
-                else:
-                    resolved = None
-                if resolved == table and isinstance(other, (exp.Placeholder, exp.Parameter)):
+                if self._resolve_column_table(ast, col_side) != table:
+                    continue
+                if accepts(other):
                     return True
         return False
 
@@ -302,6 +449,14 @@ class SecurityValidator:
         self.config = SecurityConfig.from_dict(config)
         self.analyzer = SQLAnalyzer(dialect)
         self.dialect = dialect
+        self._filters = {
+            table.lower(): RequiredFilter.from_config(table.lower(), fconfig)
+            for table, fconfig in self.config.required_filters.items()
+        }
+
+    def _required_filter(self, table: str) -> RequiredFilter | None:
+        """Parsed scoping rule for a table, or None if it has none configured."""
+        return self._filters.get(table.lower())
 
     def _filter_bypassed(self, filter_config: Any, context: dict[str, Any] | None) -> bool:
         """
@@ -326,7 +481,12 @@ class SecurityValidator:
         roles = role_value if isinstance(role_value, (list, tuple, set)) else [role_value]
         return any(role in bypass_roles for role in roles)
 
-    def validate_query(self, sql: str, context: dict[str, Any] | None = None) -> list[str]:
+    def validate_query(
+        self,
+        sql: str,
+        context: dict[str, Any] | None = None,
+        complexity_source: str | None = None,
+    ) -> list[str]:
         """
         Validate a SQL query against all security rules.
         Returns list of error messages (empty if valid).
@@ -334,6 +494,15 @@ class SecurityValidator:
         ``context`` carries the caller's runtime identity and role; it gates
         per-table required-filter enforcement so exempt roles can be allowed
         through.
+
+        ``complexity_source`` is the query to judge complexity against, when
+        that differs from the query being validated. Tenant scoping adds
+        subqueries the caller never asked for; charging those against the
+        complexity budget would mean the limit tightens every time a table gains
+        a filter, rejecting questions that were answerable the day before.
+        Defaults to ``sql``, so a directly validated query is unaffected. Table
+        and join limits still apply to the real query, which is what actually
+        executes.
         """
         errors = []
 
@@ -346,7 +515,7 @@ class SecurityValidator:
         errors.extend(self._check_tables(sql))
         errors.extend(self._check_columns(sql))
         errors.extend(self._check_joins(sql))
-        errors.extend(self._check_complexity(sql))
+        errors.extend(self._check_complexity(complexity_source or sql))
         errors.extend(self._check_dangerous_patterns(sql, ast))
         errors.extend(self._check_limit(sql))
         errors.extend(self._check_required_filters(sql, context))
@@ -407,16 +576,36 @@ class SecurityValidator:
                 continue
             if self._filter_bypassed(filter_config, context):
                 continue
-            column = (
-                filter_config if isinstance(filter_config, str) else filter_config.get("column")
-            )
-            if not column:
+            rfilter = self._required_filter(table_name)
+            if rfilter is None or rfilter.is_empty:
                 continue
-            if not self.analyzer.has_bound_filter(ast, table_name, column):
-                errors.append(
-                    f"Required filter on '{table_name}.{column}' is missing "
-                    "or not bound to a parameter"
-                )
+            errors.extend(self._filter_errors(ast, rfilter))
+
+        return errors
+
+    def _filter_errors(self, ast: exp.Expression, rfilter: RequiredFilter) -> list[str]:
+        """Report every part of a table's scoping rule the query fails to satisfy."""
+        errors: list[str] = []
+        table = rfilter.table
+
+        if rfilter.column and not self.analyzer.has_bound_filter(ast, table, rfilter.column):
+            errors.append(
+                f"Required filter on '{table}.{rfilter.column}' is missing "
+                "or not bound to a parameter"
+            )
+
+        for name, value in rfilter.constants.items():
+            if not self.analyzer.has_constant_filter(ast, table, name, value):
+                errors.append(f"Required filter on '{table}.{name}' is missing its fixed value")
+
+        through = rfilter.through
+        if through and not self.analyzer.has_scoped_subquery(
+            ast, table, through.column, through.ref_table
+        ):
+            errors.append(
+                f"Required filter on '{table}.{through.column}' must restrict rows "
+                f"to the caller's '{through.ref_table}'"
+            )
 
         return errors
 
@@ -572,37 +761,140 @@ class SecurityValidator:
             if self._filter_bypassed(filter_config, context):
                 continue
 
-            column = (
-                filter_config if isinstance(filter_config, str) else filter_config.get("column")
-            )
-            if not column:
+            rfilter = self._required_filter(table_name)
+            if rfilter is None or rfilter.is_empty:
                 continue
 
-            if context.get(column) is None:
-                raise SecurityError(
-                    f"Required filter '{table_name}.{column}' has no value in the request context"
-                )
+            for param in self._required_params(rfilter):
+                if context.get(param) is None:
+                    raise SecurityError(
+                        f"Required filter '{table_name}' has no value for '{param}' "
+                        "in the request context"
+                    )
 
-            if not self._inject_filter(ast, table_name.lower(), column):
-                raise SecurityError(f"Could not apply required filter on '{table_name}.{column}'")
+            if not self._inject_filter(ast, rfilter):
+                raise SecurityError(f"Could not apply required filter on '{table_name}'")
 
         return ast.sql(dialect=self.dialect)
 
-    def _inject_filter(self, ast: exp.Expression, table: str, column: str) -> bool:
+    def _required_params(self, rfilter: RequiredFilter, seen: frozenset | None = None) -> set[str]:
         """
-        AND ``<alias>.<column> = :<column>`` into every SELECT scope that
-        references ``table`` directly. Returns True if it was applied at least
-        once (i.e. the table really is a source somewhere).
+        Context keys a scoping rule needs, following through-chains so a borrowed
+        filter's parameter is demanded up front rather than failing mid-injection.
+        """
+        seen = seen or frozenset()
+        if rfilter.table in seen:
+            return set()
+        seen = seen | {rfilter.table}
+
+        params = set()
+        if rfilter.param_name:
+            params.add(rfilter.param_name)
+        if rfilter.through:
+            parent = self._required_filter(rfilter.through.ref_table)
+            if parent is not None:
+                params |= self._required_params(parent, seen)
+        return params
+
+    def _inject_filter(self, ast: exp.Expression, rfilter: RequiredFilter) -> bool:
+        """
+        AND a table's scoping conditions into every SELECT scope that references
+        it directly. Returns True if it was applied at least once (i.e. the table
+        really is a source somewhere).
         """
         applied = False
-        for select in ast.find_all(exp.Select):
-            alias = self.analyzer.scope_alias_for_table(select, table)
+        # Materialised because through-scoping adds SELECT nodes as we go.
+        for select in list(ast.find_all(exp.Select)):
+            alias = self.analyzer.scope_alias_for_table(select, rfilter.table)
             if alias is None:
                 continue
-            condition = exp.condition(f"{alias}.{column} = :{column}", dialect=self.dialect)
-            select.where(condition, append=True, copy=False)
+            for condition in self._filter_conditions(alias, rfilter):
+                select.where(condition, append=True, copy=False)
             applied = True
         return applied
+
+    def _filter_conditions(
+        self,
+        alias: str,
+        rfilter: RequiredFilter,
+        seen: frozenset | None = None,
+    ) -> list[exp.Expression]:
+        """Build the conditions that scope one table's rows to the caller."""
+        seen = seen or frozenset()
+        conditions: list[exp.Expression] = []
+
+        if rfilter.column:
+            conditions.append(
+                exp.condition(
+                    f"{alias}.{rfilter.column} = :{rfilter.param_name}",
+                    dialect=self.dialect,
+                )
+            )
+
+        for name, value in rfilter.constants.items():
+            conditions.append(
+                exp.EQ(
+                    this=exp.column(name, table=alias),
+                    expression=self._literal(value),
+                )
+            )
+
+        if rfilter.through:
+            conditions.append(self._through_condition(alias, rfilter, seen))
+
+        return conditions
+
+    def _through_condition(
+        self,
+        alias: str,
+        rfilter: RequiredFilter,
+        seen: frozenset,
+    ) -> exp.Expression:
+        """
+        Restrict a table to rows whose parent the caller can read:
+        ``<alias>.<column> IN (SELECT <key> FROM <parent> WHERE <parent scoping>)``.
+
+        The parent's rule is resolved recursively, so a chain (period states ->
+        budgets -> owner) lands the real tenant condition at the end of it.
+        """
+        through = rfilter.through
+        ref_table = through.ref_table
+
+        if ref_table in seen or ref_table == rfilter.table:
+            raise SecurityError(
+                f"Required filter on '{rfilter.table}' has a circular 'through' chain "
+                f"via '{ref_table}'"
+            )
+
+        parent = self._required_filter(ref_table)
+        if parent is None or parent.is_empty:
+            raise SecurityError(
+                f"Required filter on '{rfilter.table}' scopes through '{ref_table}', "
+                "which has no required filter of its own"
+            )
+
+        inner = exp.select(exp.column(through.ref_column, table=ref_table)).from_(ref_table)
+        for condition in self._filter_conditions(ref_table, parent, seen | {rfilter.table}):
+            inner = inner.where(condition)
+
+        return exp.In(
+            this=exp.column(through.column, table=alias),
+            query=exp.Subquery(this=inner),
+        )
+
+    def _literal(self, value: Any) -> exp.Expression:
+        """
+        Turn a configured constant into a literal node. Building the node rather
+        than formatting SQL text leaves escaping to the dialect's generator, so a
+        value like a backslash-separated class name survives intact.
+        """
+        if value is None:
+            return exp.Null()
+        if isinstance(value, bool):
+            return exp.Boolean(this=value)
+        if isinstance(value, (int, float)):
+            return exp.Literal.number(value)
+        return exp.Literal.string(str(value))
 
     def sanitize_identifier(self, identifier: str) -> str:
         """Sanitize a SQL identifier using sqlglot."""
@@ -648,10 +940,19 @@ class SecurityValidator:
         lines.append(f"- Maximum rows: {self.config.max_rows}")
         lines.append(f"- Maximum JOINs: {self.config.max_join_depth}")
 
-        if self.config.required_filters:
-            for table, fconfig in self.config.required_filters.items():
-                col = fconfig if isinstance(fconfig, str) else fconfig.get("column")
-                lines.append(f"- Required filter on {table}: {col}")
+        for table, rfilter in self._filters.items():
+            if rfilter.is_empty:
+                continue
+            parts = []
+            if rfilter.column:
+                parts.append(f"{rfilter.column} = :{rfilter.param_name}")
+            parts.extend(f"{name} = {value!r}" for name, value in rfilter.constants.items())
+            if rfilter.through:
+                parts.append(
+                    f"{rfilter.through.column} must belong to the caller's "
+                    f"{rfilter.through.ref_table}"
+                )
+            lines.append(f"- Required filter on {table}: {'; '.join(parts)}")
 
         return "\n".join(lines)
 

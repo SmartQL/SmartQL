@@ -88,6 +88,7 @@ class Entity:
     description: str | None = None
     aliases: list[str] = field(default_factory=list)
     columns: dict[str, Column] = field(default_factory=dict)
+    label_column: str | None = None  # Human-readable column standing in for the row
 
     @classmethod
     def from_dict(cls, name: str, data: dict) -> Entity:
@@ -102,6 +103,7 @@ class Entity:
             description=data.get("description"),
             aliases=data.get("aliases", []),
             columns=columns,
+            label_column=data.get("label_column"),
         )
 
     def get_primary_key(self) -> Column | None:
@@ -365,6 +367,20 @@ class Schema:
             if r.from_entity == entity_name or r.to_entity == entity_name
         ]
 
+    def resolve_reference(self, reference: str) -> tuple[Entity, str] | None:
+        """
+        Resolve a ``entity.column`` reference string to the target entity and
+        column name. Returns None if the reference is malformed or the entity is
+        unknown.
+        """
+        if not reference or "." not in reference:
+            return None
+        ref_entity, ref_column = reference.split(".", 1)
+        entity = self.get_entity_by_alias(ref_entity)
+        if entity is None:
+            return None
+        return entity, ref_column
+
     def get_relationship(self, from_entity: str, to_entity: str) -> Relationship | None:
         """Get the relationship between two entities."""
         for rel in self.relationships:
@@ -391,17 +407,30 @@ class Schema:
                 lines.append(f"  Description: {entity.description}")
             if entity.aliases:
                 lines.append(f"  Also known as: {', '.join(entity.aliases)}")
+            if entity.label_column:
+                lines.append(f"  Human-readable label column: {entity.label_column}")
             lines.append("  Columns:")
             for col in entity.columns.values():
                 col_info = f"    - {col.name} ({col.type})"
                 if col.primary:
                     col_info += " [PRIMARY KEY]"
+                if col.hidden:
+                    col_info += " [INTERNAL - filter only, never SELECT]"
                 if col.description:
                     col_info += f": {col.description}"
                 if col.aliases:
                     col_info += f" (aliases: {', '.join(col.aliases)})"
                 if col.values:
                     col_info += f" [values: {', '.join(col.values)}]"
+                if col.references:
+                    col_info += f" [references {col.references}"
+                    target = self.resolve_reference(col.references)
+                    if target and target[0].label_column:
+                        col_info += (
+                            f"; join and select {target[0].table}.{target[0].label_column} "
+                            "instead of showing this id"
+                        )
+                    col_info += "]"
                 lines.append(col_info)
             lines.append("")
 
