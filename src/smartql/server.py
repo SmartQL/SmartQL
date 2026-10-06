@@ -12,7 +12,6 @@ Run with:
 
 import hashlib
 import os
-import secrets
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -22,9 +21,10 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import __version__, model_proxy
+from . import __version__
 from .core import SmartQL
 from .exceptions import LLMError, SchemaError, SecurityError, SmartQLError
+from .usage import request_usage
 
 # =============================================================================
 # Pydantic Models
@@ -34,7 +34,6 @@ from .exceptions import LLMError, SchemaError, SecurityError, SmartQLError
 class AskRequest(BaseModel):
     """Request model for the /ask endpoint."""
 
-    owner_grant: Optional[str] = Field(None, exclude=True)
     question: str = Field(..., description="Natural language question")
     context: Optional[dict[str, Any]] = Field(None, description="Additional context for the query")
     execute: bool = Field(False, description="Whether to execute the query")
@@ -61,6 +60,13 @@ class AskRequest(BaseModel):
         }
 
 
+class TokenUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    complete: bool = True
+
+
 class AskResponse(BaseModel):
     """Response model for the /ask endpoint."""
 
@@ -76,6 +82,7 @@ class AskResponse(BaseModel):
     execution_time_ms: Optional[float] = None
     validation_errors: list[str] = []
     cached: bool = False
+    usage: TokenUsage = Field(default_factory=TokenUsage)
 
 
 class ValidateRequest(BaseModel):
@@ -197,9 +204,7 @@ async def startup_event():
 def get_api_key(x_api_key: Optional[str] = Header(None)) -> Optional[str]:
     """Extract API key from header."""
     required_key = os.getenv("SMARTQL_API_KEY")
-    if model_proxy.proxy_url() and not required_key:
-        raise HTTPException(status_code=503, detail="Model proxy requires API authentication.")
-    if required_key and not secrets.compare_digest(x_api_key or "", required_key):
+    if required_key and x_api_key != required_key:
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
     return x_api_key
 
@@ -253,10 +258,8 @@ async def ask(request: AskRequest, schema_id: str = Depends(get_schema_id)):
     """
     qw = _schemas[schema_id]
     start_time = time.time()
-
-    if model_proxy.proxy_url() and not request.owner_grant:
-        raise HTTPException(status_code=401, detail="An authenticated owner grant is required.")
-    token = model_proxy.owner_grant.set(request.owner_grant)
+    usage = TokenUsage().model_dump()
+    token = request_usage.set(usage)
 
     try:
         result = qw.ask(question=request.question, context=request.context, execute=request.execute)
@@ -281,6 +284,7 @@ async def ask(request: AskRequest, schema_id: str = Depends(get_schema_id)):
                 )
 
         return AskResponse(
+            usage=TokenUsage(**usage),
             sql=result.sql,
             explanation=result.explanation if request.explain else None,
             confidence=result.confidence,
@@ -296,13 +300,19 @@ async def ask(request: AskRequest, schema_id: str = Depends(get_schema_id)):
         )
 
     except SecurityError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        raise HTTPException(status_code=403, detail={"message": str(e), "usage": usage})
     except LLMError as e:
-        raise HTTPException(status_code=502, detail=f"LLM error: {str(e)}")
+        raise HTTPException(
+            status_code=502, detail={"message": f"LLM error: {str(e)}", "usage": usage}
+        )
     except SmartQLError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail={"message": str(e), "usage": usage})
+    except Exception:
+        raise HTTPException(
+            status_code=500, detail={"message": "Request failed.", "usage": usage}
+        ) from None
     finally:
-        model_proxy.owner_grant.reset(token)
+        request_usage.reset(token)
 
 
 @app.post("/validate", response_model=ValidateResponse, dependencies=[Depends(get_api_key)])

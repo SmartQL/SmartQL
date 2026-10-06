@@ -16,8 +16,8 @@ import litellm
 from litellm import acompletion, completion
 from pydantic import BaseModel
 
-from smartql import model_proxy
 from smartql.exceptions import LLMError
+from smartql.usage import record
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -196,9 +196,6 @@ class LLMProvider:
         actionable config error rather than a cryptic failure mid-generation.
         Keyless providers (local engines, cloud IAM) are skipped.
         """
-        if model_proxy.proxy_url():
-            return
-
         provider = self.config.provider
 
         if provider in _KEYLESS_PROVIDERS:
@@ -217,16 +214,16 @@ class LLMProvider:
         os.environ[env_var] = key
 
     def _completion(self, **kwargs: Any) -> Any:
-        if model_proxy.proxy_url():
-            return model_proxy.complete(**kwargs)
-        return completion(**kwargs)
+        response = completion(**kwargs)
+        if not kwargs.get("stream"):
+            record(response)
+        return response
 
     async def _acompletion(self, **kwargs: Any) -> Any:
-        if model_proxy.proxy_url():
-            import asyncio
-
-            return await asyncio.to_thread(model_proxy.complete, **kwargs)
-        return await acompletion(**kwargs)
+        response = await acompletion(**kwargs)
+        if not kwargs.get("stream"):
+            record(response)
+        return response
 
     def _get_completion_kwargs(self) -> dict[str, Any]:
         """Get extra kwargs for completion calls (e.g., api_base for Ollama)."""
@@ -257,7 +254,7 @@ class LLMProvider:
             )
             return response.choices[0].message.content or ""
         except Exception as e:
-            if self.config.fallback_models and not model_proxy.proxy_url():
+            if self.config.fallback_models:
                 return self._try_fallbacks(messages, temperature, max_tokens, e)
             raise LLMError(f"LLM generation failed: {e}")
 
