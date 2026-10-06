@@ -16,6 +16,7 @@ import litellm
 from litellm import acompletion, completion
 from pydantic import BaseModel
 
+from smartql import model_proxy
 from smartql.exceptions import LLMError
 
 
@@ -195,6 +196,9 @@ class LLMProvider:
         actionable config error rather than a cryptic failure mid-generation.
         Keyless providers (local engines, cloud IAM) are skipped.
         """
+        if model_proxy.proxy_url():
+            return
+
         provider = self.config.provider
 
         if provider in _KEYLESS_PROVIDERS:
@@ -211,6 +215,18 @@ class LLMProvider:
             )
 
         os.environ[env_var] = key
+
+    def _completion(self, **kwargs: Any) -> Any:
+        if model_proxy.proxy_url():
+            return model_proxy.complete(**kwargs)
+        return completion(**kwargs)
+
+    async def _acompletion(self, **kwargs: Any) -> Any:
+        if model_proxy.proxy_url():
+            import asyncio
+
+            return await asyncio.to_thread(model_proxy.complete, **kwargs)
+        return await acompletion(**kwargs)
 
     def _get_completion_kwargs(self) -> dict[str, Any]:
         """Get extra kwargs for completion calls (e.g., api_base for Ollama)."""
@@ -230,7 +246,7 @@ class LLMProvider:
         messages = self._build_messages(prompt, system_prompt)
 
         try:
-            response = completion(
+            response = self._completion(
                 model=self.config.model,
                 messages=messages,
                 temperature=temperature if temperature is not None else self.config.temperature,
@@ -241,7 +257,7 @@ class LLMProvider:
             )
             return response.choices[0].message.content or ""
         except Exception as e:
-            if self.config.fallback_models:
+            if self.config.fallback_models and not model_proxy.proxy_url():
                 return self._try_fallbacks(messages, temperature, max_tokens, e)
             raise LLMError(f"LLM generation failed: {e}")
 
@@ -256,7 +272,7 @@ class LLMProvider:
         messages = self._build_messages(prompt, system_prompt)
 
         try:
-            response = await acompletion(
+            response = await self._acompletion(
                 model=self.config.model,
                 messages=messages,
                 temperature=temperature if temperature is not None else self.config.temperature,
@@ -279,7 +295,7 @@ class LLMProvider:
         messages = self._build_messages(prompt, system_prompt)
 
         try:
-            response = completion(
+            response = self._completion(
                 model=self.config.model,
                 messages=messages,
                 temperature=temperature if temperature is not None else self.config.temperature,
@@ -303,7 +319,7 @@ class LLMProvider:
         messages = self._build_messages(prompt, system_prompt)
 
         try:
-            response = await acompletion(
+            response = await self._acompletion(
                 model=self.config.model,
                 messages=messages,
                 temperature=temperature if temperature is not None else self.config.temperature,
@@ -379,7 +395,7 @@ class LLMProvider:
         """Generate SQL using structured output (JSON mode)."""
         messages = self._build_messages(prompt, system_prompt)
 
-        response = completion(
+        response = self._completion(
             model=self.config.model,
             messages=messages,
             temperature=self.config.temperature,
@@ -401,7 +417,7 @@ class LLMProvider:
         """Generate SQL with JSON parsing fallback."""
         messages = self._build_messages(prompt, system_prompt)
 
-        response = completion(
+        response = self._completion(
             model=self.config.model,
             messages=messages,
             temperature=self.config.temperature,
@@ -551,7 +567,7 @@ Respond with a JSON object:
         """Try fallback models if primary fails."""
         for fallback_model in self.config.fallback_models:
             try:
-                response = completion(
+                response = self._completion(
                     model=fallback_model,
                     messages=messages,
                     temperature=temperature if temperature is not None else self.config.temperature,

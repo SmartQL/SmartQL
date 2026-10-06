@@ -12,6 +12,7 @@ Run with:
 
 import hashlib
 import os
+import secrets
 import time
 from pathlib import Path
 from typing import Any, Optional
@@ -21,7 +22,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
-from . import __version__
+from . import __version__, model_proxy
 from .core import SmartQL
 from .exceptions import LLMError, SchemaError, SecurityError, SmartQLError
 
@@ -33,6 +34,7 @@ from .exceptions import LLMError, SchemaError, SecurityError, SmartQLError
 class AskRequest(BaseModel):
     """Request model for the /ask endpoint."""
 
+    owner_grant: Optional[str] = Field(None, exclude=True)
     question: str = Field(..., description="Natural language question")
     context: Optional[dict[str, Any]] = Field(None, description="Additional context for the query")
     execute: bool = Field(False, description="Whether to execute the query")
@@ -195,7 +197,9 @@ async def startup_event():
 def get_api_key(x_api_key: Optional[str] = Header(None)) -> Optional[str]:
     """Extract API key from header."""
     required_key = os.getenv("SMARTQL_API_KEY")
-    if required_key and x_api_key != required_key:
+    if model_proxy.proxy_url() and not required_key:
+        raise HTTPException(status_code=503, detail="Model proxy requires API authentication.")
+    if required_key and not secrets.compare_digest(x_api_key or "", required_key):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
     return x_api_key
 
@@ -250,6 +254,10 @@ async def ask(request: AskRequest, schema_id: str = Depends(get_schema_id)):
     qw = _schemas[schema_id]
     start_time = time.time()
 
+    if model_proxy.proxy_url() and not request.owner_grant:
+        raise HTTPException(status_code=401, detail="An authenticated owner grant is required.")
+    token = model_proxy.owner_grant.set(request.owner_grant)
+
     try:
         result = qw.ask(question=request.question, context=request.context, execute=request.execute)
 
@@ -293,6 +301,8 @@ async def ask(request: AskRequest, schema_id: str = Depends(get_schema_id)):
         raise HTTPException(status_code=502, detail=f"LLM error: {str(e)}")
     except SmartQLError as e:
         raise HTTPException(status_code=400, detail=str(e))
+    finally:
+        model_proxy.owner_grant.reset(token)
 
 
 @app.post("/validate", response_model=ValidateResponse, dependencies=[Depends(get_api_key)])
