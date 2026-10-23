@@ -24,6 +24,7 @@ from pydantic import BaseModel, Field
 from . import __version__
 from .core import SmartQL
 from .exceptions import LLMError, SchemaError, SecurityError, SmartQLError
+from .usage import request_usage
 
 # =============================================================================
 # Pydantic Models
@@ -59,6 +60,13 @@ class AskRequest(BaseModel):
         }
 
 
+class TokenUsage(BaseModel):
+    input_tokens: int = 0
+    output_tokens: int = 0
+    total_tokens: int = 0
+    complete: bool = True
+
+
 class AskResponse(BaseModel):
     """Response model for the /ask endpoint."""
 
@@ -74,6 +82,7 @@ class AskResponse(BaseModel):
     execution_time_ms: Optional[float] = None
     validation_errors: list[str] = []
     cached: bool = False
+    usage: TokenUsage = Field(default_factory=TokenUsage)
 
 
 class ValidateRequest(BaseModel):
@@ -249,6 +258,8 @@ async def ask(request: AskRequest, schema_id: str = Depends(get_schema_id)):
     """
     qw = _schemas[schema_id]
     start_time = time.time()
+    usage = TokenUsage().model_dump()
+    token = request_usage.set(usage)
 
     try:
         result = qw.ask(question=request.question, context=request.context, execute=request.execute)
@@ -273,6 +284,7 @@ async def ask(request: AskRequest, schema_id: str = Depends(get_schema_id)):
                 )
 
         return AskResponse(
+            usage=TokenUsage(**usage),
             sql=result.sql,
             explanation=result.explanation if request.explain else None,
             confidence=result.confidence,
@@ -288,11 +300,19 @@ async def ask(request: AskRequest, schema_id: str = Depends(get_schema_id)):
         )
 
     except SecurityError as e:
-        raise HTTPException(status_code=403, detail=str(e))
+        raise HTTPException(status_code=403, detail={"message": str(e), "usage": usage})
     except LLMError as e:
-        raise HTTPException(status_code=502, detail=f"LLM error: {str(e)}")
+        raise HTTPException(
+            status_code=502, detail={"message": f"LLM error: {str(e)}", "usage": usage}
+        )
     except SmartQLError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail={"message": str(e), "usage": usage})
+    except Exception:
+        raise HTTPException(
+            status_code=500, detail={"message": "Request failed.", "usage": usage}
+        ) from None
+    finally:
+        request_usage.reset(token)
 
 
 @app.post("/validate", response_model=ValidateResponse, dependencies=[Depends(get_api_key)])

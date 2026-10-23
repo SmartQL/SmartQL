@@ -17,6 +17,7 @@ from litellm import acompletion, completion
 from pydantic import BaseModel
 
 from smartql.exceptions import LLMError
+from smartql.usage import record
 
 
 def _as_int(value: Any, default: int) -> int:
@@ -212,6 +213,18 @@ class LLMProvider:
 
         os.environ[env_var] = key
 
+    def _completion(self, **kwargs: Any) -> Any:
+        response = completion(**kwargs)
+        if not kwargs.get("stream"):
+            record(response)
+        return response
+
+    async def _acompletion(self, **kwargs: Any) -> Any:
+        response = await acompletion(**kwargs)
+        if not kwargs.get("stream"):
+            record(response)
+        return response
+
     def _get_completion_kwargs(self) -> dict[str, Any]:
         """Get extra kwargs for completion calls (e.g., api_base for Ollama)."""
         kwargs = {}
@@ -230,7 +243,7 @@ class LLMProvider:
         messages = self._build_messages(prompt, system_prompt)
 
         try:
-            response = completion(
+            response = self._completion(
                 model=self.config.model,
                 messages=messages,
                 temperature=temperature if temperature is not None else self.config.temperature,
@@ -256,7 +269,7 @@ class LLMProvider:
         messages = self._build_messages(prompt, system_prompt)
 
         try:
-            response = await acompletion(
+            response = await self._acompletion(
                 model=self.config.model,
                 messages=messages,
                 temperature=temperature if temperature is not None else self.config.temperature,
@@ -279,7 +292,7 @@ class LLMProvider:
         messages = self._build_messages(prompt, system_prompt)
 
         try:
-            response = completion(
+            response = self._completion(
                 model=self.config.model,
                 messages=messages,
                 temperature=temperature if temperature is not None else self.config.temperature,
@@ -303,7 +316,7 @@ class LLMProvider:
         messages = self._build_messages(prompt, system_prompt)
 
         try:
-            response = await acompletion(
+            response = await self._acompletion(
                 model=self.config.model,
                 messages=messages,
                 temperature=temperature if temperature is not None else self.config.temperature,
@@ -379,7 +392,7 @@ class LLMProvider:
         """Generate SQL using structured output (JSON mode)."""
         messages = self._build_messages(prompt, system_prompt)
 
-        response = completion(
+        response = self._completion(
             model=self.config.model,
             messages=messages,
             temperature=self.config.temperature,
@@ -401,7 +414,7 @@ class LLMProvider:
         """Generate SQL with JSON parsing fallback."""
         messages = self._build_messages(prompt, system_prompt)
 
-        response = completion(
+        response = self._completion(
             model=self.config.model,
             messages=messages,
             temperature=self.config.temperature,
@@ -551,7 +564,7 @@ Respond with a JSON object:
         """Try fallback models if primary fails."""
         for fallback_model in self.config.fallback_models:
             try:
-                response = completion(
+                response = self._completion(
                     model=fallback_model,
                     messages=messages,
                     temperature=temperature if temperature is not None else self.config.temperature,
